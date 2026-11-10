@@ -2,11 +2,11 @@
 
 Examples:
     python trimlight_cli.py discover
-    python trimlight_cli.py --host 192.168.10.66 status
-    python trimlight_cli.py --host 192.168.10.66 on
-    python trimlight_cli.py --host 192.168.10.66 effect "Rainbow Wave" --brightness 180
-    python trimlight_cli.py --host 192.168.10.66 color 255 120 0
-    python trimlight_cli.py -v --host 192.168.10.66 raw 15
+    python trimlight_cli.py --host 192.168.1.50 status
+    python trimlight_cli.py --host 192.168.1.50 on
+    python trimlight_cli.py --host 192.168.1.50 effect "Rainbow Wave" --brightness 180
+    python trimlight_cli.py --host 192.168.1.50 color 255 120 0
+    python trimlight_cli.py -v --host 192.168.1.50 raw 15
 """
 
 from __future__ import annotations
@@ -146,7 +146,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=5.0)
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("discover", help="find controllers on this subnet")
-    p.add_argument("--broadcast", default="255.255.255.255", help="broadcast address, e.g. 192.168.10.255")
+    p.add_argument("--broadcast", default="255.255.255.255", help="broadcast address, e.g. 192.168.1.255")
     sub.add_parser("effects", help="list the 180 built-in effects")
     sub.add_parser("status", help="connect, verify, sync and print the state")
     sub.add_parser("on", help="switch to manual mode (lights on)")

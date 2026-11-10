@@ -6,6 +6,7 @@ const BUILTINS = ["Rainbow Gradual Chase", "Rainbow Comet", "Rainbow Segment", "
 const STATE = {
   entities: { light: "light.porch", mode: "select.porch_mode", calendar: "calendar.porch_schedules" },
   switch_state: "off",
+  control: { lit: false, by: "you", until: "2026-11-10T03:00:00+00:00", window: null, hold_minutes: 60, hold_choices: [30, 60, 120, 240, null], trying: false },
   modes: MODES.map((key) => ({ key, name: key.charAt(0).toUpperCase() + key.slice(1).replaceAll("_", " ") })),
   repeats: ["today_only", "every_day", "weekdays", "weekend"],
   combined_name: "Combined effect",
@@ -47,7 +48,7 @@ const STATE = {
   music: { effects: ["Full Color Rhythm Spectrum", "Single Color Rhythm Spectrum", "Full Color Rhythm Twinkle", "Single Color Rhythm Twinkle", "Gradient Energy", "Single Color Energy",
     "Gradient Pulse", "Single Color Pulse", "Full Color Ejection Forward", "Single Color Ejection Forward", "Full Color Ejection Backward", "Single Color Ejection Backward",
     "Full Color VuMeter", "Single Color VuMeter", "Independence Day", "Christmas", "HeatBeat", "Party"], source: "aux", color: "#ff0000", length: 70, sensitivity: 13 },
-  device: { name: "Porch", host: "192.168.10.66", firmware: "1.11", mcu_version: "0x1042", ic_type: "UCS1903", channel_order: "RGB",
+  device: { name: "Porch", host: "192.168.1.50", firmware: "1.11", mcu_version: "0x1042", ic_type: "UCS1903", channel_order: "RGB",
     ic_type_value: 0, channel_order_value: 0, led_session: null, max_port_dot: 2700,
     ic_types: ["UCS1903", "DMX512", "UCS5603"].map((name, value) => ({ value, name })),
     channel_orders: ["RGB", "RBG", "GRB", "GBR", "BRG", "BGR"].map((name, value) => ({ value, name })),
@@ -101,7 +102,7 @@ const wsCalls = [];
 const stamp = (id) => ({ entity_id: id, state: "on", last_updated: "1", attributes: {} });
 const hass = {
   states: {
-    "light.porch": { ...stamp("light.porch"), attributes: { effect: "CANADA DAY", controller_busy: false, friendly_name: "Porch" } },
+    "light.porch": { ...stamp("light.porch"), state: "off", attributes: { effect: "CANADA DAY", controller_busy: false, friendly_name: "Porch" } },
     "select.porch_mode": { ...stamp("select.porch_mode"), state: "off" },
     "calendar.porch_schedules": stamp("calendar.porch_schedules"),
   },
@@ -118,6 +119,10 @@ const hass = {
     if (msg.type === "trimlight_local/waiting_delete") {
       wsCalls.push(msg);
       STATE.waiting = STATE.waiting.filter((w) => w.id !== msg.waiting_id);
+      return {};
+    }
+    if (/^trimlight_local\/(try|hold_minutes)$/.test(msg.type)) {
+      wsCalls.push(msg);
       return {};
     }
     if (/^trimlight_local\/(led_test|led_setup|led_session_end|rename)$/.test(msg.type)) {
@@ -241,22 +246,38 @@ async function testPage() {
   const last = () => calls.at(-1);
 
   check("page: seven tabs", $$(".tab").map((t) => t.textContent).join() === "Patterns,Effects,Music,Schedules,Daily,Combined effect,Settings", $$(".tab").map((t) => t.textContent).join());
-  check("page: Now shows the effect and Off", $(".now b").textContent === "Lights off" && act("mode", "off").getAttribute("aria-pressed") === "true", $(".now b").textContent);
-  check("page: the roofline says it previews", $(".hero .tag").textContent === "Preview · approximate");
-  act("mode", "timer").click();
-  check("page: the mode button changes at once, before the controller answers", act("mode", "timer").getAttribute("aria-pressed") === "true" && act("mode", "off").getAttribute("aria-pressed") === "false");
+  const withLight = (state, stamp) => ({ ...hass, states: { ...hass.states, "light.porch": { ...hass.states["light.porch"], state, last_updated: stamp } } });
+  check("page: Now says the lights are off, who set that and until when", $(".now b").textContent === "Lights off" && $(".now small").textContent.startsWith("Set by you · back to schedule at"), $(".now small").textContent);
+  check("page: one power button instead of Off, Manual and Timer", $$('[data-act="mode"]').length === 0 && act("power").textContent.trim() === "Turn on" && !!act("keep") && !!act("resume"));
+  check("page: the roofline shows the roof, dark while off", $(".hero .tag").textContent === "Lights off", $(".hero .tag").textContent);
+  act("power").click();
+  check("page: Turn on shows at once, before the controller answers", $(".now b").textContent === "CANADA DAY" && $(".hero .tag").textContent === "On the roof now · approximate", $(".now b").textContent);
   await tick();
-  check("page: Timer sets the mode select", JSON.stringify(calls.find((c) => c.domain === "select")) === JSON.stringify({ domain: "select", service: "select_option", data: { option: "timer" }, target: { entity_id: "select.porch_mode" } }));
+  check("page: Turn on turns the light on", JSON.stringify(calls.find((c) => c.domain === "light")) === JSON.stringify({ domain: "light", service: "turn_on", data: {}, target: { entity_id: "light.porch" } }), JSON.stringify(calls));
+  page.hass = withLight("on", "on1");
+  await tick();
+  act("resume").click();
+  check("page: Back to schedule hands over at once", $(".now small").textContent.startsWith("By schedule"), $(".now small").textContent);
+  await tick();
+  check("page: Back to schedule calls its service", last().service === "resume_schedule" && last().domain === "trimlight_local", JSON.stringify(last()));
+  page.hass = hass;
+  await tick();
 
   // Patterns
-  check("patterns: rail lists new, what's showing and the saved patterns", $$('[data-act="open"]').map((b) => b.dataset.key).join() === "new,current,6,7,9");
+  check("patterns: opens the saved pattern on the roof, with no unsaved copy in the rail", $$('[data-act="open"]').map((b) => b.dataset.key).join() === "new,6,7,9" && $(".editor-head h2").textContent === "CANADA DAY", $(".editor-head h2") ? $(".editor-head h2").textContent : "");
+  check("patterns: each saved pattern has a play button, and the editor has no Show or Live preview", $$('[data-act="show-saved"]').map((b) => b.dataset.key).join() === "6,7,9" && !act("show-pattern") && !$('[data-in="live"]') && !!$('[data-in="try"]'));
+  act("open", "new").click();
+  await tick();
+  check("patterns: a new pattern says so, with a name hint instead of a form label", $(".editor-head h2").textContent === "New pattern" && $('[data-in="name"]').placeholder === "e.g. Fourth of July");
   act("open", 7).click();
   await tick();
   check("patterns: HALLOWEEN opens with its name, mode and colours", $('[data-in="name"]').value === "HALLOWEEN" && $('[data-in="mode"]').value === "chase_forward" && $$(".tile").length === 3);
   check("patterns: overlay shows lightning, delete is blocked", act("overlay", "lightning").getAttribute("aria-pressed") === "true" && act("delete-pattern").disabled);
-  act("show-pattern").click();
+  act("show-saved", 7).click();
   await tick();
-  check("patterns: an unchanged saved pattern plays from the controller's memory, overlay and all", JSON.stringify(last().data) === JSON.stringify({ effect_id: 7 }) && last().service === "show_saved_effect", JSON.stringify(last()));
+  check("patterns: the play button shows the saved pattern from the controller's memory, overlay and all", JSON.stringify(last().data) === JSON.stringify({ effect_id: 7 }) && last().service === "show_saved_effect", JSON.stringify(last()));
+  page.hass = withLight("on", "on2");
+  await tick();
   const before = calls.length;
   act("overlay", "snow").click();
   check("patterns: Snow shows as chosen at once", act("overlay", "snow").getAttribute("aria-pressed") === "true");
@@ -271,10 +292,21 @@ async function testPage() {
   $('[data-act="move"][data-step="1"]').click();
   await tick();
   check("patterns: move right swaps colours", $$(".tile")[1].querySelector(".sw.unlit") !== null);
-  act("show-pattern").click();
+  const tryBox = $('[data-in="try"]');
+  tryBox.checked = true;
+  tryBox.dispatchEvent(new Event("change", { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  check("patterns: Try on the lights starts trying, then shows the edited pattern",
+    JSON.stringify(wsCalls.at(-1)) === JSON.stringify({ type: "trimlight_local/try", entity_id: "light.porch", on: true })
+    && JSON.stringify(last().data) === JSON.stringify({ mode: "chase_forward", colors: ["#7700ff", "none", "#7800ff"], dots: [5, 5, 5], speed: 1, brightness: 255 }), JSON.stringify([wsCalls.at(-1), last()]));
+  check("patterns: while trying, the roofline and the note say so", $(".hero .tag").textContent === "Trying on the lights · approximate" && $$(".editor .note").some((n) => n.textContent.includes("go back")), $(".hero .tag").textContent);
+  const tryAgain = $('[data-in="try"]');
+  tryAgain.checked = false;
+  tryAgain.dispatchEvent(new Event("change", { bubbles: true }));
   await tick();
-  check("patterns: Show on lights sends the edited pattern",
-    JSON.stringify(last().data) === JSON.stringify({ mode: "chase_forward", colors: ["#7700ff", "none", "#7800ff"], dots: [5, 5, 5], speed: 1, brightness: 255 }), JSON.stringify(last()));
+  check("patterns: stopping puts the lights back", JSON.stringify(wsCalls.at(-1)) === JSON.stringify({ type: "trimlight_local/try", entity_id: "light.porch", on: false }) && $(".hero .tag").textContent !== "Trying on the lights · approximate", JSON.stringify(wsCalls.at(-1)));
+  page.hass = hass;
+  await tick();
   const name = $('[data-in="name"]');
   name.value = "Spooky";
   name.dispatchEvent(new Event("input", { bubbles: true }));
@@ -333,6 +365,8 @@ async function testPage() {
   // Schedules
   await tab("schedules");
   check("schedules: opens on the year view with 12 months", $$(".mini").length === 12);
+  const pausedBox = $$(".warn-box").find((b) => b.textContent.includes("Schedules are paused"));
+  check("schedules: says they are paused by your change, with a way back", !!pausedBox && pausedBox.textContent.includes("take over again at") && !!pausedBox.querySelector('[data-act="resume"]'), pausedBox ? pausedBox.textContent : "none");
   check("schedules: Dec 1-27 is coloured like CHRISTMAS", $$(".mini")[11].querySelectorAll(".g span.on").length === 27);
   check("schedules: the legend lists every schedule, and the waiting one", $$(".legend button").length === 5 && $$(".legend button.waiting").length === 1);
   $$(".mini")[11].querySelectorAll('.g span[data-act="day"]')[9].click();
@@ -517,6 +551,11 @@ async function testPage() {
   await tick();
   check("settings: Keep keeps the ports", sent(1) === '[["led_session_end",{"keep":true}]]' && portInput("end", 1).value === "450" && !portInput("on", 2).checked, sent(1));
 
+  check("settings: changes last 1 hour by default, with Ecobee-style choices", pressed("hold") === "1 hour" && $$('[data-act="hold"]').map((b) => b.textContent.trim()).join() === "30 minutes,1 hour,2 hours,4 hours,Until changed", pressed("hold"));
+  act("hold", "keep").click();
+  check("settings: Until changed is chosen at once", pressed("hold") === "Until changed", pressed("hold"));
+  await tick();
+  check("settings: the choice is sent to Home Assistant", sent(1) === '[["hold_minutes",{"minutes":null}]]', sent(1));
   const nameInput = $('[data-in="ctl-name"]');
   check("settings: the name shows with Rename disabled", nameInput.value === "Porch" && act("rename-controller").disabled);
   await type(nameInput, "Roof/line");

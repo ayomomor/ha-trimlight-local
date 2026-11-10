@@ -7,7 +7,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_HOST
 
-from .const import DOMAIN
+from .const import CONF_DEVICE_CODE, DOMAIN
 from .trimlight import ControllerBusy, DiscoveredDevice, TrimlightClient, TrimlightError, discover
 
 _LOGGER = logging.getLogger(__name__)
@@ -29,6 +29,12 @@ class TrimlightConfigFlow(ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
         if user_input is not None:
             host = user_input[CONF_HOST].strip()
+            device = self._discovered.get(host)
+            if device is not None and device.device_code:
+                for entry in self._async_current_entries():
+                    if entry.data.get(CONF_DEVICE_CODE) == device.device_code:
+                        self.hass.config_entries.async_update_entry(entry, data={**entry.data, CONF_HOST: host})
+                        return self.async_abort(reason="already_configured")
             await self.async_set_unique_id(host)
             self._abort_if_unique_id_configured()
             client = TrimlightClient(host)
@@ -40,18 +46,17 @@ class TrimlightConfigFlow(ConfigFlow, domain=DOMAIN):
                 _LOGGER.debug("Cannot connect to %s: %s", host, err)
                 errors["base"] = "cannot_connect"
             else:
-                device = self._discovered.get(host)
-                return self.async_create_entry(title=device.name if device and device.name else f"Trimlight {host}", data={CONF_HOST: host})
+                data = {CONF_HOST: host, **({CONF_DEVICE_CODE: device.device_code} if device and device.device_code else {})}
+                return self.async_create_entry(title=device.name if device and device.name else "Trimlight", data=data)
             finally:
                 await client.close()
 
         configured = {entry.unique_id for entry in self._async_current_entries()}
         unconfigured = [d for d in self._discovered.values() if d.host not in configured]
-        default_host = (user_input or {}).get(CONF_HOST) or (unconfigured[0].host if unconfigured else "")
         found = ", ".join(f"{d.name} ({d.host})" for d in unconfigured) or "none"
         return self.async_show_form(
             step_id="user",
-            data_schema=vol.Schema({vol.Required(CONF_HOST, default=default_host): str}),
+            data_schema=self.add_suggested_values_to_schema(vol.Schema({vol.Required(CONF_HOST): str}), user_input or {}),
             errors=errors,
             description_placeholders={"found": found},
         )

@@ -4,6 +4,7 @@ from .effects import CUSTOM_MODES_V2
 from .trimlight import Repeat
 
 DOMAIN = "trimlight_local"
+CONF_DEVICE_CODE = "device_code"
 
 DEFAULT_SPEED = 100
 DEFAULT_PIXEL_LEN = 30
@@ -59,6 +60,8 @@ SERVICE_DELETE_SCHEDULE = "delete_schedule"
 SERVICE_SET_DAILY_SCHEDULE = "set_daily_schedule"
 SERVICE_SHOW_EFFECT = "show_effect"
 SERVICE_START_MUSIC = "start_music"
+SERVICE_RESUME_SCHEDULE = "resume_schedule"
+SERVICE_KEEP_CHANGE = "keep_change"
 ATTR_EFFECT_ID = "effect_id"
 ATTR_MODE = "mode"
 ATTR_COLORS = "colors"

@@ -15,6 +15,7 @@ from homeassistant.util import dt as dt_util
 from homeassistant.const import SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET
 
 from .const import COMBINED_EFFECT_NAME, DOMAIN, MUSIC_EFFECTS, PATTERN_MODES, REPEATS, ROOFLINES
+from .control import HOLD_CHOICES
 from .coordinator import TrimlightCoordinator, writable_from
 from .holiday_rules import HOLIDAYS, HolidayRule
 from .sun import SunTime, now, window_times
@@ -50,6 +51,8 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_led_session_end)
     websocket_api.async_register_command(hass, ws_rename)
     websocket_api.async_register_command(hass, ws_waiting_delete)
+    websocket_api.async_register_command(hass, ws_try)
+    websocket_api.async_register_command(hass, ws_hold_minutes)
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/state", vol.Required("entity_id"): cv.entity_id})
@@ -145,6 +148,20 @@ async def ws_led_session_end(hass: HomeAssistant, connection: websocket_api.Acti
     await _run_on_controller(hass, connection, msg, lambda c: c.async_end_led_session(msg["keep"]))
 
 
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/try", vol.Required("entity_id"): cv.entity_id, vol.Required("on"): bool})
+@websocket_api.async_response
+async def ws_try(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    await _run_on_controller(hass, connection, msg, lambda c: c.async_try(msg["on"]))
+
+
+@websocket_api.websocket_command(
+    {vol.Required("type"): f"{DOMAIN}/hold_minutes", vol.Required("entity_id"): cv.entity_id, vol.Required("minutes"): vol.Any(None, vol.In([m for m in HOLD_CHOICES if m]))}
+)
+@websocket_api.async_response
+async def ws_hold_minutes(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    await _run_on_controller(hass, connection, msg, lambda c: c.async_set_hold_minutes(msg["minutes"]))
+
+
 def describe(coordinator: TrimlightCoordinator, entity_ids: dict[str, str]) -> dict[str, Any]:
     data = coordinator.data
     overlays = {o.effect_id: OverlayKind(o.kind).name.lower() for o in data.overlays if o.kind in OverlayKind._value2member_map_}
@@ -165,6 +182,7 @@ def describe(coordinator: TrimlightCoordinator, entity_ids: dict[str, str]) -> d
     return {
         "entities": entity_ids,
         "switch_state": SwitchState(data.switch_state).name.lower() if data.switch_state in SwitchState._value2member_map_ else None,
+        "control": coordinator.control_summary(),
         "modes": [{"key": key, "name": name.capitalize()} for key, name in zip(_MODE_KEYS, CUSTOM_MODES_V2)],
         "repeats": list(REPEATS),
         "combined_name": COMBINED_EFFECT_NAME,

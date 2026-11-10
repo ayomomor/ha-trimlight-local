@@ -1,7 +1,7 @@
 # A ready-made Trimlight dashboard.
 # 1. Settings > Dashboards > Add dashboard > New dashboard from scratch. Title "Trimlight", tick "Add to sidebar".
 # 2. Open it, then the pencil > three-dot menu > Raw configuration editor, replace everything with this file, and save.
-# The entity IDs below are for a controller added by IP address 192.168.10.66; change them if yours differ.
+# The entity IDs below are for a controller named Roofline; change "roofline" to your controller's name as Home Assistant shows it.
 views:
   - title: "Trimlight"
     path: "trimlight"
@@ -13,42 +13,42 @@ views:
           - type: "heading"
             heading: "Lights"
           - type: "tile"
-            entity: "light.trimlight_192_168_10_66"
+            entity: "light.roofline"
             features:
               - type: "light-brightness"
           - type: "entities"
             entities:
-              - "select.trimlight_192_168_10_66_mode"
-              - "number.trimlight_192_168_10_66_effect_speed"
-              - "number.trimlight_192_168_10_66_effect_length"
-              - "switch.trimlight_192_168_10_66_reverse_direction"
+              - "select.roofline_mode"
+              - "number.roofline_effect_speed"
+              - "number.roofline_effect_length"
+              - "switch.roofline_reverse_direction"
       - type: "grid"
         cards:
           - type: "heading"
             heading: "Patterns"
           - type: "custom:trimlight-pattern-card"
-            entity: "light.trimlight_192_168_10_66"
+            entity: "light.roofline"
       - type: "grid"
         cards:
           - type: "heading"
             heading: "Schedules"
           - type: "calendar"
             entities:
-              - "calendar.trimlight_192_168_10_66_schedules"
+              - "calendar.roofline_schedules"
             initial_view: "dayGridMonth"
           - type: "entities"
             title: "Daily schedule 1"
             entities:
-              - "switch.trimlight_192_168_10_66_daily_schedule_1"
-              - "select.trimlight_192_168_10_66_daily_schedule_1_effect"
-              - "select.trimlight_192_168_10_66_daily_schedule_1_repeat"
-              - "time.trimlight_192_168_10_66_daily_schedule_1_on"
-              - "time.trimlight_192_168_10_66_daily_schedule_1_off"
+              - "switch.roofline_daily_schedule_1"
+              - "select.roofline_daily_schedule_1_effect"
+              - "select.roofline_daily_schedule_1_repeat"
+              - "time.roofline_daily_schedule_1_on"
+              - "time.roofline_daily_schedule_1_off"
           - type: "entities"
             title: "Daily schedule 2"
             entities:
-              - "switch.trimlight_192_168_10_66_daily_schedule_2"
-              - "select.trimlight_192_168_10_66_daily_schedule_2_effect"
-              - "select.trimlight_192_168_10_66_daily_schedule_2_repeat"
-              - "time.trimlight_192_168_10_66_daily_schedule_2_on"
-              - "time.trimlight_192_168_10_66_daily_schedule_2_off"
+              - "switch.roofline_daily_schedule_2"
+              - "select.roofline_daily_schedule_2_effect"
+              - "select.roofline_daily_schedule_2_repeat"
+              - "time.roofline_daily_schedule_2_on"
+              - "time.roofline_daily_schedule_2_off"
