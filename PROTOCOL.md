@@ -334,7 +334,12 @@ Observed on 2026-11-08:
 - **Dropped requests.** A request sent within a few milliseconds of the previous reply is sometimes ignored: 1 of 2 back-to-back syncs was dropped, while 6 of 6 sent after a 0.2 s pause were answered. A dropped request never gets a late answer. Even with a 0.3 s pause, 1 sync in about 17 requests went unanswered and needed a retry.
 - **Timing.** Sync replies (about 3.4 KB) take 0.55–1.0 s; the app's own timeout is 8 s [0x689e7c].
 - **Previews persist.** What a preview shows becomes the current effect, and switching off and back to manual resumes it.
-- **One client at a time.** When a second TCP client connects, the controller closes the first connection. When the first reconnects, the second is closed in turn.
+- **One client at a time.** When a second TCP client connects, the controller closes the first connection. When the first reconnects, the second is closed in turn. Both clients ran on the same computer.
+
+Observed on 2026-11-09, with clients on two devices:
+
+- **A client on another device waits.** While Home Assistant on one computer was connected and polling every 30 s, a second Home Assistant on another device could open TCP 8586, but its verify request got no answer, in two attempts about a minute apart. The first connection was not closed. Once the first client disconnected, a new client was answered straight away.
+- *(inferred)* The controller lets a new connection from the same IP address replace the old one, and ignores other addresses while it is serving one.
 
 Observed on 2026-11-09, writing to the controller's memory:
 

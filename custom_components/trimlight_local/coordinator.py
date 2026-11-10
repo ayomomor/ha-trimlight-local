@@ -41,6 +41,7 @@ from .trimlight import (
     Repeat,
     SwitchState,
     SyncState,
+    ControllerBusy,
     TrimlightClient,
     TrimlightError,
     encode_segments,
@@ -63,8 +64,8 @@ LED_TEST_COLOURS = {"red": (255, 0, 0), "green": (0, 255, 0), "blue": (0, 0, 255
 LED_TEST_PATTERN = encode_segments([(10, (255, 0, 0)), (10, (0, 255, 0)), (10, (0, 0, 255)), (10, (255, 255, 255))])
 # A leap year, so that Feb 29 schedules have a day too.
 _SCHEDULE_YEAR = 2016
-# How long polling leaves the controller alone after it dropped the connection for another client, normally the phone app.
-YIELD_SECONDS = 300
+# The daily schedule update is tried again this much later when another app had the controller.
+BUSY_REFRESH_RETRY = timedelta(minutes=10)
 
 
 @dataclass(frozen=True)
@@ -105,6 +106,8 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry, client: TrimlightClient) -> None:
         super().__init__(hass, _LOGGER, config_entry=entry, name=f"Trimlight {client.host}", update_interval=SCAN_INTERVAL)
         self.client = client
+        client.on_busy_change = self.async_update_listeners
+        self._refresh_retry: CALLBACK_TYPE | None = None
         self.effect_settings = EffectSettings()
         self._write_lock = asyncio.Lock()
         self.sun = SunRules.for_entry(hass, entry.entry_id)
@@ -138,14 +141,15 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         await self._page_store.async_save({"favourites": self.favourites, "roofline": self.roofline})
 
     async def _async_update_data(self) -> SyncState:
-        if self.data is not None and self.client.closed_by_controller_within(YIELD_SECONDS):
-            # Reconnecting would cut off whoever took the connection; keep the last state until they are likely done.
-            return self.data
         if self.data is not None and self._write_lock.locked():
             # A change is being read back, and the controller may be silent for a while after one.
             return self.data
         try:
-            state = await self.client.sync()
+            state = await self.client.sync(wait=0, linger=0)
+        except ControllerBusy as err:
+            if self.data is None:
+                raise UpdateFailed(str(err)) from err
+            return self.data
         except TrimlightError as err:
             raise UpdateFailed(str(err)) from err
         self._follow_effect_settings(state.current_effect)
@@ -164,9 +168,9 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
                 await rules.async_save()
 
     @property
-    def yielding(self) -> bool:
-        """Polling is paused because another client, normally the phone app, has the controller."""
-        return self.client.closed_by_controller_within(YIELD_SECONDS)
+    def busy(self) -> bool:
+        """Another app, normally the phone app, had the controller at the last attempt to reach it."""
+        return self.client.busy
 
     def _follow_effect_settings(self, current: CurrentEffect | None) -> None:
         if current is None:
@@ -525,9 +529,22 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
 
     async def async_refresh_schedules(self, _: datetime | None = None) -> None:
         """The daily update: holiday schedules move on to their coming dates, then sun times follow the sun."""
-        await self.holiday_dates.async_load(self.hass, now().date())
-        await self.async_refresh_holiday_dates()
-        await self.async_refresh_sun_times()
+        if not self.client.busy:
+            await self.holiday_dates.async_load(self.hass, now().date())
+            await self.async_refresh_holiday_dates()
+            await self.async_refresh_sun_times()
+        if self.client.busy and self._refresh_retry is None:
+            self._refresh_retry = async_call_later(self.hass, BUSY_REFRESH_RETRY, self._async_retry_refresh)
+
+    async def _async_retry_refresh(self, _: datetime) -> None:
+        self._refresh_retry = None
+        await self.async_refresh_schedules()
+
+    @callback
+    def async_cancel_refresh_retry(self) -> None:
+        if self._refresh_retry is not None:
+            self._refresh_retry()
+            self._refresh_retry = None
 
     async def async_refresh_holiday_dates(self) -> None:
         """Put each holiday schedule on the controller for the next nights it gets, once the last ones have passed.

@@ -24,7 +24,7 @@ python trimlight_cli.py discover --broadcast 192.168.10.255
 
 Add `-v` to any command to print every frame sent and received. If something doesn't behave as expected, that output is what's needed to fix it.
 
-The controller serves one connection at a time: when something new connects (the phone app, this tool, Home Assistant), it drops the previous one.
+The controller talks to one app at a time. While one is connected, an app on another device gets no answer until the first lets go, so close the phone app while you test.
 
 ## 2. Install in Home Assistant
 
@@ -282,10 +282,11 @@ In the card:
 - The Trimlight page works like the phone app: a tap shows its result at once and the command goes out in the background. A small "Saving" sign in the header shows while changes are still being confirmed, and a message appears only if one fails.
 - A solid colour has no separate brightness on the controller, so brightness is applied by scaling the colour.
 - A saved effect at its stored brightness is shown as saved. At any other brightness, its pattern is re-sent with the new brightness; the copy saved on the controller is not changed.
-- The controller serves one connection at a time. When the phone app connects, the controller drops Home Assistant's connection.
-  - Home Assistant then stops polling for 5 minutes, so it doesn't cut the app off, and keeps showing the last known state.
-  - The light's `polling_paused` attribute is true during that time.
-  - Anything you ask Home Assistant to do still goes through straight away, and takes the connection back.
+- The controller talks to one app at a time and ignores other devices while one is connected. So Home Assistant connects only while it needs to, and the phone app can get in the rest of the time:
+  - **Polls**: connect, read the state and hang up, about 1–2 s every 30 s.
+  - **Changes**: the connection stays open for 10 s after the last one, so several quick changes share it.
+  - **While another app has the controller** (normally the Trimlight app on a phone), polls keep the last known state, the light's `controller_busy` attribute is true, and the Trimlight page shows a warning.
+  - **A change made in Home Assistant meanwhile** waits up to 30 s for the app to let go, then fails with a message saying so. The daily schedule update tries again 10 minutes later.
 - Home Assistant polls every 30 s. Each poll also sets the controller's clock, using Home Assistant's timezone, as the app does when it connects.
 - Changes to the controller's memory are checked the same way:
   - **Covered**: saved effects, schedules, overlays and the combined effect.

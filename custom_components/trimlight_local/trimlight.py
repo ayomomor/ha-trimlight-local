@@ -40,6 +40,12 @@ POST_VERIFY_DELAY = 0.4
 MIN_REQUEST_GAP = 0.3
 # A sync this recent (usually the one connect() just did) is reused instead of asking again.
 FRESH_SYNC_SECONDS = 2.0
+# Seen on a controller: while one client is connected, a client from another device is accepted but never answered, so
+# a connection that stayed open would lock the phone app out. A connection is closed this long after its last request.
+LINGER_SECONDS = 10.0
+# How long a request waits for another client, such as the phone app, to let go of the controller.
+BUSY_WAIT_SECONDS = 30.0
+BUSY_RETRY_SECONDS = 2.0
 
 B64_ALPHABET = "0dY8ubicPgrReph1ENo9jvCn67y2tFQ5HWJIwOVZzDfkT3K4GSsABlqUXaMLxm+/"
 _STD_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -101,6 +107,16 @@ CHANNEL_ORDERS = {0: "RGB", 1: "RBG", 2: "GRB", 3: "GBR", 4: "BRG", 5: "BGR"}
 
 class TrimlightError(Exception):
     """Raised when the controller cannot be reached or does not answer."""
+
+
+class ControllerBusy(TrimlightError):
+    """The controller accepted the connection but did not answer the verify handshake, as it does while serving another client."""
+
+    def __init__(self, host: str) -> None:
+        super().__init__(
+            f"The controller at {host} is busy with another app, probably the Trimlight app on a phone. "
+            "It talks to one app at a time, so close that app and try again."
+        )
 
 
 def b64encode(data: bytes) -> str:
@@ -578,7 +594,7 @@ def sync_request_data(now: datetime) -> bytes:
 
 
 class TrimlightClient:
-    """One TCP control session to a controller, reconnecting as needed."""
+    """Short TCP control sessions to a controller: opened for a request and closed again soon after."""
 
     def __init__(self, host: str, port: int = TCP_PORT, *, reply_timeout: float = REPLY_TIMEOUT, clock: Callable[[], datetime] = datetime.now) -> None:
         self.host = host
@@ -595,37 +611,43 @@ class TrimlightClient:
         self.verified: bool | None = None
         self.firmware: FirmwareInfo | None = None
         self.state: SyncState | None = None
-        self._closed_by_controller_at: float | None = None
+        # Whether the last attempt to connect found the controller serving another client.
+        self.busy = False
+        self.on_busy_change: Callable[[], None] | None = None
+        self._close_at = 0.0
+        self._closer: asyncio.Task | None = None
 
     @property
     def connected(self) -> bool:
         return self._writer is not None and self._read_task is not None and not self._read_task.done()
 
-    def closed_by_controller_within(self, seconds: float) -> bool:
-        """Whether the controller dropped this connection less than `seconds` ago and it has not been reopened.
-
-        The controller serves one client at a time and drops the older connection when another (such as the phone app) connects.
-        """
-        return not self.connected and self._closed_by_controller_at is not None and time.monotonic() - self._closed_by_controller_at < seconds
-
     async def connect(self) -> SyncState:
+        """Connect once, without waiting if the controller is busy with another client."""
         async with self._lock:
             try:
                 await self._connect_locked()
+            except ControllerBusy:
+                self._set_busy(True)
+                raise
             except (OSError, ConnectionError, asyncio.TimeoutError) as err:
                 await self._close_locked()
                 raise TrimlightError(f"{self.host}: {err!r}") from err
+            self._set_busy(False)
+            self._release(LINGER_SECONDS)
             assert self.state is not None
             return self.state
 
     async def close(self) -> None:
+        if self._closer is not None and self._closer is not asyncio.current_task():
+            self._closer.cancel()
         async with self._lock:
             await self._close_locked()
 
-    async def sync(self, *, fresh: bool = False) -> SyncState:
+    async def sync(self, *, fresh: bool = False, wait: float | None = None, linger: float | None = None) -> SyncState:
         """Read the controller state; this also sets the controller's clock from `clock`, as the app does.
 
-        A sync from the last couple of seconds is reused unless `fresh` is set.
+        A sync from the last couple of seconds is reused unless `fresh` is set. `wait` and `linger` are as for every
+        request: how long to wait for a busy controller, and how long to keep the connection afterwards.
         """
 
         async def refresh() -> None:
@@ -633,7 +655,7 @@ class TrimlightClient:
                 await self._sync_locked()
 
         async with self._lock:
-            await self._retry_locked(refresh)
+            await self._retry_locked(refresh, wait=wait, linger=linger)
             assert self.state is not None
             return self.state
 
@@ -734,36 +756,80 @@ class TrimlightClient:
             await self._retry_locked(exchange)
         return result[0]
 
-    async def _retry_locked(self, action: Callable[[], object]) -> None:
-        for attempt in (1, 2):
-            try:
-                await self._ensure_alive_locked()
-                await action()  # type: ignore[misc]
-                return
-            except asyncio.TimeoutError as err:
-                if attempt == 2:
+    async def _retry_locked(self, action: Callable[[], object], *, wait: float | None = None, linger: float | None = None) -> None:
+        """Run `action` on a connection, waiting up to `wait` seconds for a busy controller, then close it after `linger` seconds."""
+        deadline = time.monotonic() + (BUSY_WAIT_SECONDS if wait is None else wait)
+        try:
+            for attempt in (1, 2):
+                try:
+                    await self._ensure_alive_locked(deadline)
+                    await action()  # type: ignore[misc]
+                    return
+                except asyncio.TimeoutError as err:
+                    if attempt == 2:
+                        await self._close_locked()
+                        raise TrimlightError(f"{self.host}: {err!r}") from err
+                    # Seen on the controller: it drops a request now and then but keeps the connection, so a heartbeat decides
+                    # whether to ask again on it or reconnect, which costs a verify and a full sync.
+                    _LOGGER.debug("%s: no answer, checking the connection", self.host)
+                    self._last_activity = 0.0
+                except (OSError, ConnectionError) as err:
                     await self._close_locked()
-                    raise TrimlightError(f"{self.host}: {err!r}") from err
-                # Seen on the controller: it drops a request now and then but keeps the connection, so a heartbeat decides
-                # whether to ask again on it or reconnect, which costs a verify and a full sync.
-                _LOGGER.debug("%s: no answer, checking the connection", self.host)
-                self._last_activity = 0.0
-            except (OSError, ConnectionError) as err:
-                await self._close_locked()
-                if attempt == 2:
-                    raise TrimlightError(f"{self.host}: {err!r}") from err
-                _LOGGER.debug("%s: %r, reconnecting", self.host, err)
+                    if attempt == 2:
+                        raise TrimlightError(f"{self.host}: {err!r}") from err
+                    _LOGGER.debug("%s: %r, reconnecting", self.host, err)
+        finally:
+            self._release(LINGER_SECONDS if linger is None else linger)
 
-    async def _ensure_alive_locked(self) -> None:
+    async def _ensure_alive_locked(self, deadline: float) -> None:
         if not self.connected:
-            await self._connect_locked()
+            await self._connect_waiting_locked(deadline)
             return
         if time.monotonic() - self._last_activity > IDLE_CHECK_SECONDS:
             try:
                 await self._exchange(encode_frame(Command.HEARTBEAT, b"\x01"), lambda m: isinstance(m, Frame) and m.command == Command.HEARTBEAT)
             except (OSError, ConnectionError, asyncio.TimeoutError):
                 _LOGGER.debug("%s: no heartbeat reply, reconnecting", self.host)
+                await self._connect_waiting_locked(deadline)
+
+    async def _connect_waiting_locked(self, deadline: float) -> None:
+        while True:
+            try:
                 await self._connect_locked()
+            except ControllerBusy:
+                self._set_busy(True)
+                if time.monotonic() + BUSY_RETRY_SECONDS >= deadline:
+                    raise
+                _LOGGER.debug("%s is busy with another client, trying again", self.host)
+                await asyncio.sleep(BUSY_RETRY_SECONDS)
+                continue
+            self._set_busy(False)
+            return
+
+    def _set_busy(self, busy: bool) -> None:
+        if busy != self.busy:
+            self.busy = busy
+            if self.on_busy_change is not None:
+                self.on_busy_change()
+
+    def _release(self, linger: float) -> None:
+        """Close the connection `linger` seconds from now, unless a later request keeps it longer."""
+        if not self.connected:
+            return
+        self._close_at = max(self._close_at, time.monotonic() + linger)
+        if self._closer is None or self._closer.done():
+            self._closer = asyncio.create_task(self._close_when_due())
+
+    async def _close_when_due(self) -> None:
+        while True:
+            if (wait := self._close_at - time.monotonic()) > 0:
+                await asyncio.sleep(wait)
+                continue
+            async with self._lock:
+                if time.monotonic() >= self._close_at:
+                    _LOGGER.debug("Closing the connection to %s", self.host)
+                    await self._close_locked()
+                    return
 
     async def _connect_locked(self) -> None:
         await self._close_locked()
@@ -781,6 +847,7 @@ class TrimlightClient:
     async def _close_locked(self) -> None:
         task, writer = self._read_task, self._writer
         self._read_task = self._reader = self._writer = None
+        self._close_at = 0.0
         if task is not None:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -797,8 +864,9 @@ class TrimlightClient:
         try:
             reply = await self._exchange(request, lambda m: isinstance(m, SFrameMessage))
         except asyncio.TimeoutError:
-            _LOGGER.warning("%s did not answer the verify handshake", self.host)
-            return False
+            _LOGGER.debug("%s did not answer the verify handshake", self.host)
+            await self._close_locked()
+            raise ControllerBusy(self.host) from None
         assert isinstance(reply, SFrameMessage)
         try:
             value = b64decode(reply.payload.decode("ascii"))
@@ -852,7 +920,6 @@ class TrimlightClient:
                     self._dispatch(message)
         except OSError as err:
             _LOGGER.debug("%s read error: %r", self.host, err)
-        self._closed_by_controller_at = time.monotonic()
         self._fail_waiters(ConnectionError("connection closed by controller"))
 
     def _dispatch(self, message: Frame | SFrameMessage) -> None:

@@ -48,6 +48,8 @@ class FakeController:
         self._silent_until = -1.0
         self._server: asyncio.base_events.Server | None = None
         self._writers: list[asyncio.StreamWriter] = []
+        self._ignored: list[asyncio.StreamWriter] = []
+        self.ignored_connections = 0
 
     async def start(self, port: int = 0) -> int:
         self._server = await asyncio.start_server(self._handle, "127.0.0.1", port)
@@ -60,19 +62,35 @@ class FakeController:
             await self._server.wait_closed()
 
     async def drop_connections(self) -> None:
-        for writer in self._writers:
+        for writer in self._writers + self._ignored:
             writer.close()
         self._writers.clear()
+        self._ignored.clear()
         await asyncio.sleep(0.05)
+
+    @property
+    def serving(self) -> bool:
+        return bool(self._writers)
 
     def sync_data(self) -> bytes:
         return bytes((self.switch_state,)) + self.sync_tail
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         self.connections += 1
-        # Like the real controller, serve one client at a time: a new connection closes the older ones.
-        for older in self._writers:
-            older.close()
+        # Like the real controller with a client on another device: while one is served, a new one is accepted but never answered.
+        if self._writers:
+            self.ignored_connections += 1
+            self._ignored.append(writer)
+            try:
+                while await reader.read(4096):
+                    pass
+            except (ConnectionError, OSError):
+                pass
+            finally:
+                if writer in self._ignored:
+                    self._ignored.remove(writer)
+                writer.close()
+            return
         self._writers = [writer]
         decoder = StreamDecoder(frozenset())
         loop = asyncio.get_running_loop()
@@ -96,6 +114,10 @@ class FakeController:
                         await writer.drain()
         except (ConnectionError, OSError):
             pass
+        finally:
+            if writer in self._writers:
+                self._writers.remove(writer)
+            writer.close()
 
     def _reply(self, message: Frame | SFrameMessage) -> bytes | None:
         if isinstance(message, SFrameMessage):
