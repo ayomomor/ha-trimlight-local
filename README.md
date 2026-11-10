@@ -28,10 +28,10 @@ The controller serves one connection at a time: when something new connects (the
 
 ## 2. Install in Home Assistant
 
-With [HACS](https://hacs.xyz):
+With the Marketplace (in Settings, from Home Assistant 2026.11, which has HACS built in) or [HACS](https://hacs.xyz) on older versions:
 
-1. In HACS, open **⋮ → Custom repositories**, add `https://github.com/ayomomor/ha-trimlight-local` with the type **Integration**.
-2. Find **Trimlight Edge (Local)** in HACS and download it.
+1. Add `https://github.com/ayomomor/ha-trimlight-local` as a custom repository with the type **Integration**. The Marketplace asks you to connect a GitHub account first. In HACS it is under **⋮ → Custom repositories**.
+2. Find **Trimlight Edge (Local)** and download it.
 3. Restart Home Assistant.
 
 Or by hand: copy `custom_components/trimlight_local` into your Home Assistant `config/custom_components/` folder, then restart Home Assistant.
