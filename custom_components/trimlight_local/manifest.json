@@ -1,0 +1,22 @@
+{
+  "domain": "trimlight_local",
+  "name": "Trimlight Edge (Local)",
+  "after_dependencies": [
+    "frontend",
+    "panel_custom"
+  ],
+  "codeowners": ["@ayomomor"],
+  "config_flow": true,
+  "dependencies": [
+    "http",
+    "websocket_api"
+  ],
+  "documentation": "https://github.com/ayomomor/ha-trimlight-local",
+  "integration_type": "device",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/ayomomor/ha-trimlight-local/issues",
+  "requirements": [
+    "holidays>=0.60"
+  ],
+  "version": "0.1.0"
+}

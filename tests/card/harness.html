@@ -1,0 +1,34 @@
+<!doctype html>
+<!--
+  Renders the Trimlight card and page with a simulated Home Assistant, outside Home Assistant.
+    harness.html#test             clicks through the card and the page and writes PASS/FAIL lines into #results
+    harness.html#card             shows the card with HALLOWEEN open
+    harness.html#page-<tab>       shows the page on a tab (patterns, effects, music, schedules, month, list, drawer, daily, combined, settings); add -narrow for phone layout
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trimlight UI harness</title>
+<style>
+  :root {
+    --primary-color: #03a9f4; --text-primary-color: #fff; --primary-text-color: #212121; --secondary-text-color: #727272;
+    --divider-color: rgba(0, 0, 0, 0.12); --card-background-color: #fff; --secondary-background-color: #eceff1; --error-color: #db4437;
+    --primary-background-color: #fafafa; --app-header-background-color: #03a9f4; --app-header-text-color: #fff; --warning-color: #ffa600;
+  }
+  body { margin: 0; background: #f5f5f5; font: 14px Roboto, "Segoe UI", sans-serif; color: var(--primary-text-color); }
+  #card { width: 400px; margin: 16px; }
+  #card:empty, #results:empty { display: none; }
+  ha-card { background: var(--card-background-color); border-radius: 12px; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15); }
+  #results { white-space: pre-wrap; font: 12px monospace; margin: 16px; }
+</style>
+<script>customElements.define("ha-card", class extends HTMLElement {});</script>
+<script src="../../custom_components/trimlight_local/frontend/trimlight-ui.js"></script>
+</head>
+<body>
+<div id="card"></div>
+<div id="page"></div>
+<pre id="results"></pre>
+<script src="harness.js"></script>
+</body>
+</html>

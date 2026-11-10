@@ -1,0 +1,466 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Trimlight Edge",
+        "description": "Enter the controller's IP address. Controllers found on this network: {found}.",
+        "data": {
+          "host": "Host"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not connect to the controller on TCP port 8586."
+    },
+    "abort": {
+      "already_configured": "This controller is already configured."
+    }
+  },
+  "entity": {
+    "select": {
+      "mode": {
+        "name": "Mode",
+        "state": {
+          "off": "Off",
+          "manual": "Manual",
+          "timer": "Timer"
+        }
+      },
+      "daily_schedule_effect": {
+        "name": "Daily schedule {number} effect"
+      },
+      "daily_schedule_repeat": {
+        "name": "Daily schedule {number} repeat",
+        "state": {
+          "today_only": "Today only",
+          "every_day": "Every day",
+          "weekdays": "Weekdays (Mon-Fri)",
+          "weekend": "Weekend (Sat-Sun)"
+        }
+      }
+    },
+    "number": {
+      "effect_speed": {
+        "name": "Effect speed"
+      },
+      "effect_pixel_len": {
+        "name": "Effect length"
+      }
+    },
+    "switch": {
+      "effect_reverse": {
+        "name": "Reverse direction"
+      },
+      "daily_schedule_enabled": {
+        "name": "Daily schedule {number}"
+      }
+    },
+    "time": {
+      "daily_schedule_on_time": {
+        "name": "Daily schedule {number} on"
+      },
+      "daily_schedule_off_time": {
+        "name": "Daily schedule {number} off"
+      }
+    },
+    "calendar": {
+      "schedules": {
+        "name": "Schedules"
+      }
+    }
+  },
+  "services": {
+    "show_saved_effect": {
+      "name": "Show saved effect",
+      "description": "Shows an effect stored in the controller's own library, by its ID.",
+      "fields": {
+        "effect_id": {
+          "name": "Effect ID",
+          "description": "Library slot number of the effect."
+        }
+      }
+    },
+    "show_pattern": {
+      "name": "Show pattern",
+      "description": "Shows a custom pattern with your own colours, like the app's pattern editor. It is not saved on the controller.",
+      "fields": {
+        "mode": {
+          "name": "Mode",
+          "description": "How the colours move."
+        },
+        "colors": {
+          "name": "Colours",
+          "description": "Up to 30 colours, in order. Each is a name (red), a hex code (#ff8800) or [R, G, B]."
+        },
+        "dots": {
+          "name": "Dots per colour",
+          "description": "How many dots each colour covers (1-90). One number for all colours, or a list with one per colour."
+        },
+        "speed": {
+          "name": "Speed",
+          "description": "0-255. Defaults to the Effect speed setting."
+        },
+        "brightness": {
+          "name": "Brightness",
+          "description": "0-255. Defaults to the light's current brightness."
+        }
+      }
+    },
+    "save_effect": {
+      "name": "Save effect",
+      "description": "Saves an effect in the controller's library, so the app, schedules and the effect list can use it. Without a pattern, it saves what the lights show now. A saved effect with the same name is replaced.",
+      "fields": {
+        "name": {
+          "name": "Name",
+          "description": "Up to 25 characters."
+        },
+        "mode": {
+          "name": "Mode",
+          "description": "To save a pattern instead of what is showing: how its colours move."
+        },
+        "colors": {
+          "name": "Colours",
+          "description": "The pattern's colours, as for Show pattern."
+        },
+        "dots": {
+          "name": "Dots per colour",
+          "description": "1-90; one number, or one per colour."
+        },
+        "speed": {
+          "name": "Speed",
+          "description": "0-255."
+        },
+        "brightness": {
+          "name": "Brightness",
+          "description": "0-255."
+        }
+      }
+    },
+    "rename_saved_effect": {
+      "name": "Rename saved effect",
+      "description": "Renames an effect in the controller's library.",
+      "fields": {
+        "effect": {
+          "name": "Effect",
+          "description": "The saved effect's name, as in the light's effect list."
+        },
+        "new_name": {
+          "name": "New name",
+          "description": "Up to 25 characters."
+        }
+      }
+    },
+    "delete_saved_effect": {
+      "name": "Delete saved effect",
+      "description": "Deletes an effect from the controller's library. Effects used by a schedule or the combined effect cannot be deleted.",
+      "fields": {
+        "effect": {
+          "name": "Effect",
+          "description": "The saved effect's name, as in the light's effect list."
+        }
+      }
+    },
+    "set_overlay": {
+      "name": "Set lightning or snow",
+      "description": "Adds lightning or snow over a saved effect whenever it plays, or removes it.",
+      "fields": {
+        "effect": {
+          "name": "Effect",
+          "description": "The saved effect's name."
+        },
+        "overlay": {
+          "name": "Overlay",
+          "description": "None, lightning or snow."
+        }
+      }
+    },
+    "set_combined_effect": {
+      "name": "Set combined effect",
+      "description": "Sets the saved effects the combined effect plays in turn. Schedules can use the combined effect.",
+      "fields": {
+        "effects": {
+          "name": "Effects",
+          "description": "Saved effect names, in playing order."
+        },
+        "interval": {
+          "name": "Interval",
+          "description": "Minutes each effect plays, 1-10."
+        }
+      }
+    },
+    "set_schedule": {
+      "name": "Set schedule",
+      "description": "Adds a calendar schedule, or changes one when a schedule ID is given. It shows a saved effect every night between the dates, every year, when Mode is Timer.",
+      "fields": {
+        "schedule_id": {
+          "name": "Schedule ID",
+          "description": "The schedule to change, shown in the calendar event. Leave empty to add a new one."
+        },
+        "effect": {
+          "name": "Effect",
+          "description": "A saved effect's name, or Combined effect."
+        },
+        "start_date": {
+          "name": "Start date",
+          "description": "First night. The year is ignored. Leave empty when the schedule follows a holiday."
+        },
+        "end_date": {
+          "name": "End date",
+          "description": "Last night; defaults to the start date. An end before the start runs over New Year."
+        },
+        "holiday": {
+          "name": "Holiday",
+          "description": "Instead of dates: follow a holiday whose date moves, such as Easter or Thanksgiving. Home Assistant moves the schedule to the holiday's next dates once they have passed."
+        },
+        "holiday_start_offset": {
+          "name": "Days from the holiday to the first night",
+          "description": "Negative is before the holiday, so -2 starts two days before it."
+        },
+        "holiday_end_offset": {
+          "name": "Days from the holiday to the last night",
+          "description": "0 ends on the holiday itself."
+        },
+        "on_time": {
+          "name": "On time",
+          "description": "When the lights turn on each night; or use On at sunset or sunrise."
+        },
+        "on_sun": {
+          "name": "On at sunset or sunrise",
+          "description": "Instead of an on time: follow sunset or sunrise. Home Assistant works the time out from its location and updates it each day."
+        },
+        "on_offset": {
+          "name": "On offset",
+          "description": "Minutes after sunset or sunrise; negative is before."
+        },
+        "off_time": {
+          "name": "Off time",
+          "description": "When they turn off; a time before the on time means the next morning. Or use Off at sunset or sunrise."
+        },
+        "off_sun": {
+          "name": "Off at sunset or sunrise",
+          "description": "Instead of an off time: follow sunset or sunrise."
+        },
+        "off_offset": {
+          "name": "Off offset",
+          "description": "Minutes after sunset or sunrise; negative is before."
+        },
+        "waiting_id": {
+          "name": "Waiting schedule",
+          "description": "A holiday schedule Home Assistant is holding off the controller, which this one replaces. The Trimlight page fills this in."
+        }
+      }
+    },
+    "delete_schedule": {
+      "name": "Delete schedule",
+      "description": "Deletes a calendar schedule.",
+      "fields": {
+        "schedule_id": {
+          "name": "Schedule ID",
+          "description": "Shown in the calendar event."
+        }
+      }
+    },
+    "set_daily_schedule": {
+      "name": "Set daily schedule",
+      "description": "Changes daily schedule 1 or 2 in one go. Daily schedules run when Mode is Timer. Settings left out stay as they are.",
+      "fields": {
+        "schedule": {
+          "name": "Schedule",
+          "description": "1 or 2."
+        },
+        "enabled": {
+          "name": "On",
+          "description": "Whether the schedule is used."
+        },
+        "effect": {
+          "name": "Effect",
+          "description": "A saved effect's name, or Combined effect."
+        },
+        "repeat": {
+          "name": "Repeat",
+          "description": "Today only, every day, weekdays or weekend."
+        },
+        "on_time": {
+          "name": "On time",
+          "description": "When the lights turn on."
+        },
+        "on_sun": {
+          "name": "On at sunset or sunrise",
+          "description": "Instead of an on time: follow sunset or sunrise. Home Assistant works the time out from its location and updates it each day."
+        },
+        "on_offset": {
+          "name": "On offset",
+          "description": "Minutes after sunset or sunrise; negative is before."
+        },
+        "off_time": {
+          "name": "Off time",
+          "description": "When they turn off; a time before the on time means the next morning."
+        },
+        "off_sun": {
+          "name": "Off at sunset or sunrise",
+          "description": "Instead of an off time: follow sunset or sunrise."
+        },
+        "off_offset": {
+          "name": "Off offset",
+          "description": "Minutes after sunset or sunrise; negative is before."
+        }
+      }
+    },
+    "show_effect": {
+      "name": "Show built-in effect",
+      "description": "Shows one of the 180 built-in effects with its speed, length, direction and brightness in a single command.",
+      "fields": {
+        "effect": {
+          "name": "Effect",
+          "description": "The built-in effect's name, as in the light's effect list."
+        },
+        "speed": {
+          "name": "Speed",
+          "description": "0-255; defaults to the Effect speed setting."
+        },
+        "length": {
+          "name": "Length",
+          "description": "1-90 dots; defaults to the Effect length setting."
+        },
+        "reverse": {
+          "name": "Reverse",
+          "description": "Run it the other way; defaults to the Reverse direction setting."
+        },
+        "brightness": {
+          "name": "Brightness",
+          "description": "0-255."
+        }
+      }
+    },
+    "start_music": {
+      "name": "Start music effect",
+      "description": "Starts one of the 18 music effects, driven by sound on the controller's own audio (AUX) input. Settings left out keep the controller's current ones.",
+      "fields": {
+        "effect": {
+          "name": "Effect",
+          "description": "The music effect's name, for example Full Color Rhythm Spectrum."
+        },
+        "color": {
+          "name": "Colour",
+          "description": "Used by the single-colour effects."
+        },
+        "length": {
+          "name": "Length",
+          "description": "1-150."
+        },
+        "sensitivity": {
+          "name": "Sensitivity",
+          "description": "1-16."
+        }
+      }
+    }
+  },
+  "selector": {
+    "pattern_mode": {
+      "options": {
+        "static": "Static",
+        "chase_forward": "Chase forward",
+        "chase_backward": "Chase backward",
+        "chase_middle_to_out": "Chase middle to out",
+        "chase_out_to_middle": "Chase out to middle",
+        "twinkle_fade": "Twinkle fade",
+        "fade": "Fade",
+        "comet_forward": "Comet forward",
+        "comet_backward": "Comet backward",
+        "comet_middle_to_out": "Comet middle to out",
+        "comet_out_to_middle": "Comet out to middle",
+        "wave_forward": "Wave forward",
+        "wave_backward": "Wave backward",
+        "wave_middle_to_out": "Wave middle to out",
+        "wave_out_to_middle": "Wave out to middle",
+        "strobe": "Strobe",
+        "solid_fade": "Solid fade",
+        "full_strobe": "Full strobe",
+        "twinkle": "Twinkle",
+        "firework": "Firework",
+        "inside_out": "Inside out"
+      }
+    },
+    "overlay": {
+      "options": {
+        "none": "None",
+        "lightning": "Lightning",
+        "snow": "Snow"
+      }
+    },
+    "repeat": {
+      "options": {
+        "today_only": "Today only",
+        "every_day": "Every day",
+        "weekdays": "Weekdays (Mon-Fri)",
+        "weekend": "Weekend (Sat-Sun)"
+      }
+    },
+    "sun_event": {
+      "options": {
+        "sunset": "Sunset",
+        "sunrise": "Sunrise"
+      }
+    },
+    "holiday": {
+      "options": {
+        "new_years_day": "New Year's Day",
+        "mlk_day": "Martin Luther King Jr. Day",
+        "valentines_day": "Valentine's Day",
+        "presidents_day": "Presidents' Day",
+        "st_patricks_day": "St. Patrick's Day",
+        "mothers_day": "Mother's Day",
+        "memorial_day": "Memorial Day",
+        "fathers_day": "Father's Day",
+        "juneteenth": "Juneteenth",
+        "independence_day": "Independence Day",
+        "labor_day": "Labor Day",
+        "grandparents_day": "Grandparents Day",
+        "columbus_day": "Columbus Day / Indigenous Peoples' Day",
+        "halloween": "Halloween",
+        "election_day": "Election Day",
+        "veterans_day": "Veterans Day",
+        "thanksgiving": "Thanksgiving",
+        "christmas_eve": "Christmas Eve",
+        "christmas": "Christmas Day",
+        "new_years_eve": "New Year's Eve",
+        "mardi_gras": "Mardi Gras",
+        "ash_wednesday": "Ash Wednesday",
+        "palm_sunday": "Palm Sunday",
+        "good_friday": "Good Friday",
+        "easter": "Easter",
+        "pentecost": "Pentecost",
+        "orthodox_christmas": "Orthodox Christmas",
+        "orthodox_easter": "Orthodox Easter",
+        "purim": "Purim",
+        "passover": "Passover",
+        "shavuot": "Shavuot",
+        "rosh_hashanah": "Rosh Hashanah",
+        "yom_kippur": "Yom Kippur",
+        "sukkot": "Sukkot",
+        "hanukkah": "Hanukkah",
+        "eid_al_fitr": "Eid al-Fitr",
+        "eid_al_adha": "Eid al-Adha",
+        "islamic_new_year": "Islamic New Year",
+        "mawlid": "Prophet's Birthday (Mawlid)",
+        "holi": "Holi",
+        "buddha_purnima": "Vesak / Buddha Purnima",
+        "raksha_bandhan": "Raksha Bandhan",
+        "janmashtami": "Janmashtami",
+        "ganesh_chaturthi": "Ganesh Chaturthi",
+        "dussehra": "Dussehra",
+        "diwali": "Diwali",
+        "guru_nanak_jayanti": "Guru Nanak Jayanti",
+        "lunar_new_year": "Lunar New Year",
+        "dragon_boat": "Dragon Boat Festival",
+        "mid_autumn": "Mid-Autumn Festival",
+        "nowruz": "Nowruz",
+        "cinco_de_mayo": "Cinco de Mayo",
+        "canada_day": "Canada Day",
+        "nigeria_independence_day": "Nigerian Independence Day",
+        "day_of_the_dead": "Day of the Dead",
+        "kwanzaa": "Kwanzaa"
+      }
+    }
+  }
+}
