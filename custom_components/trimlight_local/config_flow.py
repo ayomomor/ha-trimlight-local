@@ -8,7 +8,7 @@ from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_HOST
 
 from .const import DOMAIN
-from .trimlight import DiscoveredDevice, TrimlightClient, TrimlightError, discover
+from .trimlight import ControllerBusy, DiscoveredDevice, TrimlightClient, TrimlightError, discover
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,6 +34,8 @@ class TrimlightConfigFlow(ConfigFlow, domain=DOMAIN):
             client = TrimlightClient(host)
             try:
                 await client.connect()
+            except ControllerBusy:
+                errors["base"] = "busy"
             except TrimlightError as err:
                 _LOGGER.debug("Cannot connect to %s: %s", host, err)
                 errors["base"] = "cannot_connect"

@@ -244,7 +244,7 @@ class TrimlightLight(TrimlightEntity, LightEntity, RestoreEntity):
         attributes: dict[str, Any] = {
             "mode": SwitchState(state).name.lower() if state in SwitchState._value2member_map_ else state,
             "verified": coordinator.client.verified,
-            "polling_paused": coordinator.yielding,
+            "controller_busy": coordinator.busy,
         }
         if data is not None:
             attributes["overlays"] = {coordinator.saved_effect_name(o.effect_id) or str(o.effect_id): OverlayKind(o.kind).name.lower() if o.kind in OverlayKind._value2member_map_ else o.kind for o in data.overlays}

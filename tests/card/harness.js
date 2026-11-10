@@ -101,7 +101,7 @@ const wsCalls = [];
 const stamp = (id) => ({ entity_id: id, state: "on", last_updated: "1", attributes: {} });
 const hass = {
   states: {
-    "light.porch": { ...stamp("light.porch"), attributes: { effect: "CANADA DAY", polling_paused: false, friendly_name: "Porch" } },
+    "light.porch": { ...stamp("light.porch"), attributes: { effect: "CANADA DAY", controller_busy: false, friendly_name: "Porch" } },
     "select.porch_mode": { ...stamp("select.porch_mode"), state: "off" },
     "calendar.porch_schedules": stamp("calendar.porch_schedules"),
   },
@@ -312,6 +312,16 @@ async function testPage() {
   // Music
   await tab("music");
   check("music: 18 effects and the AUX source", $$(".mx").length === 18 && $(".source label").textContent.includes("Your controller is set up this way"));
+  check("music: only the source that works is offered", $$(".source label").length === 1 && !$(".source .badge") && !$(".source input"));
+  const withBusy = (busy, stamp) => ({ ...hass, states: { ...hass.states, "light.porch": { ...hass.states["light.porch"], last_updated: stamp, attributes: { ...hass.states["light.porch"].attributes, controller_busy: busy } } } });
+  page.hass = withBusy(true, "busy");
+  await tick();
+  check("page: a busy controller explains the wait", !!$(".now .busy-note") && $(".now .busy-note").textContent.includes("up to 30 seconds") && $(".now .busy-note").textContent.includes("Trimlight app"), $(".now").textContent);
+  page.hass = withBusy(false, "free");
+  await tick();
+  check("page: the warning goes once the controller is free", !$(".now .busy-note"));
+  page.hass = hass;
+  await tick();
   act("music", 7).click();
   await tick();
   check("music: a single-colour effect enables the colour", !$('[data-in="music-colour"]').disabled);

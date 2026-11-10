@@ -12,6 +12,7 @@ from component import effects, trimlight  # noqa: E402
 from fake_controller import FakeController, FakeDiscoveryResponder  # noqa: E402
 from trimlight import (  # noqa: E402
     Command,
+    ControllerBusy,
     Frame,
     SFrameMessage,
     StreamDecoder,
@@ -272,16 +273,60 @@ class ClientTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
-    async def test_second_client_takes_over_the_controller(self):
-        await self.client.connect()
+    async def test_busy_controller_is_reported(self):
         other = TrimlightClient("127.0.0.1", self.client.port, reply_timeout=0.5)
         await other.connect()
-        await asyncio.sleep(0.05)
-        self.assertTrue(self.client.closed_by_controller_within(10))
-        self.assertFalse(other.closed_by_controller_within(10))
-        await self.client.sync(fresh=True)
-        self.assertFalse(self.client.closed_by_controller_within(10))
+        changes = []
+        self.client.on_busy_change = lambda: changes.append(self.client.busy)
+        with self.assertRaises(ControllerBusy):
+            await self.client.connect()
+        self.assertTrue(self.client.busy)
+        self.assertTrue(other.connected)
         await other.close()
+        await asyncio.sleep(0.05)
+        await self.client.connect()
+        self.assertFalse(self.client.busy)
+        self.assertEqual(changes, [True, False])
+
+    async def test_request_waits_for_the_other_client(self):
+        other = TrimlightClient("127.0.0.1", self.client.port, reply_timeout=0.5)
+        await other.connect()
+        asyncio.get_running_loop().call_later(0.8, lambda: asyncio.ensure_future(other.close()))
+        with mock.patch.object(trimlight, "BUSY_RETRY_SECONDS", 0.05):
+            await self.client.set_switch_state(SwitchState.OFF)
+        await asyncio.sleep(0.05)
+        self.assertEqual(self.controller.switch_state, SwitchState.OFF)
+        self.assertGreaterEqual(self.controller.ignored_connections, 1)
+        self.assertFalse(self.client.busy)
+
+    async def test_request_gives_up_on_a_busy_controller(self):
+        other = TrimlightClient("127.0.0.1", self.client.port, reply_timeout=0.5)
+        await other.connect()
+        with mock.patch.object(trimlight, "BUSY_RETRY_SECONDS", 0.05), mock.patch.object(trimlight, "BUSY_WAIT_SECONDS", 1.0):
+            with self.assertRaisesRegex(ControllerBusy, "Trimlight app"):
+                await self.client.set_switch_state(SwitchState.OFF)
+        self.assertEqual(self.controller.switch_state, SwitchState.MANUAL)
+        await other.close()
+
+    async def test_connection_is_let_go_after_requests(self):
+        with mock.patch.object(trimlight, "LINGER_SECONDS", 0.2):
+            await self.client.set_switch_state(SwitchState.OFF)
+            await self.client.set_switch_state(SwitchState.TIMER)
+            self.assertTrue(self.client.connected)
+            await asyncio.sleep(0.4)
+        self.assertFalse(self.client.connected)
+        self.assertFalse(self.controller.serving)
+        self.assertEqual(self.controller.connections, 1)
+
+    async def test_poll_lets_go_at_once_but_keeps_a_recent_command(self):
+        await self.client.sync(linger=0)
+        await asyncio.sleep(0.05)
+        self.assertFalse(self.client.connected)
+        await self.client.set_switch_state(SwitchState.OFF)
+        await self.client.sync(fresh=True, linger=0)
+        await asyncio.sleep(0.05)
+        self.assertTrue(self.client.connected)
+        self.assertEqual(self.controller.connections, 2)
 
     async def test_port_and_rename_payloads(self):
         await self.client.connect()

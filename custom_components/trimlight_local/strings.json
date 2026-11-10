@@ -10,7 +10,8 @@
       }
     },
     "error": {
-      "cannot_connect": "Could not connect to the controller on TCP port 8586."
+      "cannot_connect": "Could not connect to the controller on TCP port 8586.",
+      "busy": "The controller didn't answer. It talks to one app at a time, so another app is probably connected to it, such as the Trimlight app on a phone. Close that app and submit again."
     },
     "abort": {
       "already_configured": "This controller is already configured."

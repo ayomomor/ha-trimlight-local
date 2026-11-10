@@ -1,5 +1,6 @@
 import asyncio
 from datetime import date, datetime, time
+from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
@@ -23,7 +24,7 @@ from custom_components.trimlight_local.const import DOMAIN
 from custom_components.trimlight_local.effects import BUILTIN_EFFECTS
 from custom_components.trimlight_local.holiday_rules import HolidayDates, HolidayRule, HolidayRules
 from custom_components.trimlight_local.sun import SunRules, SunTime
-from custom_components.trimlight_local.trimlight import DiscoveredDevice, Sub
+from custom_components.trimlight_local.trimlight import DiscoveredDevice, Sub, TrimlightClient
 
 LIGHT = "light.porch"
 MODE = "select.porch_mode"
@@ -435,27 +436,57 @@ async def test_overlays_and_combined_effect(hass: HomeAssistant, controller) -> 
     await hass.async_block_till_done()
 
 
-async def test_polling_pauses_while_another_client_has_the_controller(hass: HomeAssistant, controller) -> None:
+async def test_connection_is_short_and_waits_for_the_phone_app(hass: HomeAssistant, controller) -> None:
     use_fixture(controller, "sync_reply.hex")
-    entry = await setup_entry(hass)
-    _, phone = await asyncio.open_connection("127.0.0.1", 8586)
-    await asyncio.sleep(0.1)
-    syncs = sum(sub == Sub.SYNC for sub, _ in controller.passthrough)
-    with patch("custom_components.trimlight_local.trimlight.FRESH_SYNC_SECONDS", -1):
+    quick = partial(TrimlightClient, reply_timeout=0.3)
+    with (
+        patch("custom_components.trimlight_local.TrimlightClient", quick),
+        patch("custom_components.trimlight_local.trimlight.BUSY_RETRY_SECONDS", 0.05),
+        patch("custom_components.trimlight_local.trimlight.LINGER_SECONDS", 0.1),
+    ):
+        entry = await setup_entry(hass)
+        await asyncio.sleep(0.2)
+        assert not controller.serving
+
+        _, phone = await asyncio.open_connection("127.0.0.1", 8586)
+        await asyncio.sleep(0.05)
+        syncs = sum(sub == Sub.SYNC for sub, _ in controller.passthrough)
         await entry.runtime_data.async_refresh()
-    await hass.async_block_till_done()
-    assert sum(sub == Sub.SYNC for sub, _ in controller.passthrough) == syncs
-    state = hass.states.get(LIGHT)
-    assert (state.state, state.attributes["polling_paused"]) == (STATE_ON, True)
+        await hass.async_block_till_done()
+        assert sum(sub == Sub.SYNC for sub, _ in controller.passthrough) == syncs
+        state = hass.states.get(LIGHT)
+        assert (state.state, state.attributes["controller_busy"]) == (STATE_ON, True)
 
-    await hass.services.async_call(LIGHT_DOMAIN, "turn_off", {ATTR_ENTITY_ID: LIGHT}, blocking=True)
-    await settle(hass)
-    assert controller.switch_state == 0
-    assert hass.states.get(LIGHT).attributes["polling_paused"] is False
+        hass.loop.call_later(0.5, phone.close)
+        await hass.services.async_call(LIGHT_DOMAIN, "turn_off", {ATTR_ENTITY_ID: LIGHT}, blocking=True)
+        await settle(hass)
+        assert controller.switch_state == 0
+        assert hass.states.get(LIGHT).attributes["controller_busy"] is False
 
+        await asyncio.sleep(0.2)
+        assert not controller.serving
+        _, phone = await asyncio.open_connection("127.0.0.1", 8586)
+        await asyncio.sleep(0.05)
+        with patch("custom_components.trimlight_local.trimlight.BUSY_WAIT_SECONDS", 0.5), pytest.raises(HomeAssistantError, match="Trimlight app"):
+            await hass.services.async_call(LIGHT_DOMAIN, "turn_on", {ATTR_ENTITY_ID: LIGHT}, blocking=True)
+        assert controller.switch_state == 0
+        phone.close()
+
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()
+
+
+async def test_config_flow_reports_a_busy_controller(hass: HomeAssistant, controller) -> None:
+    _, phone = await asyncio.open_connection("127.0.0.1", 8586)
+    await asyncio.sleep(0.05)
+    with (
+        patch("custom_components.trimlight_local.config_flow.discover", return_value=[]),
+        patch("custom_components.trimlight_local.config_flow.TrimlightClient", partial(TrimlightClient, reply_timeout=0.3)),
+    ):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_HOST: "127.0.0.1"})
+    assert result["errors"] == {"base": "busy"}
     phone.close()
-    assert await hass.config_entries.async_unload(entry.entry_id)
-    await hass.async_block_till_done()
 
 
 async def test_page_data_and_file(hass: HomeAssistant, controller, hass_ws_client, hass_client) -> None:

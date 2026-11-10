@@ -63,7 +63,7 @@ const dayText = ([month, day]) => `${MONTHS[month - 1] || "?"} ${day}`;
 function trimlightLights(hass) {
   const fromRegistry = Object.values(hass.entities || {}).filter((e) => e.platform === DOMAIN && e.entity_id.startsWith("light.")).map((e) => e.entity_id);
   if (fromRegistry.length) return fromRegistry;
-  return Object.keys(hass.states).filter((id) => id.startsWith("light.") && "polling_paused" in hass.states[id].attributes);
+  return Object.keys(hass.states).filter((id) => id.startsWith("light.") && "controller_busy" in hass.states[id].attributes);
 }
 
 // A change to any entity of the controller's device is the cue to read the state again.
@@ -136,6 +136,10 @@ class TrimlightEditor extends HTMLElement {
     this._busy = true;
     this.busyChanged();
     this._setStatus(pending);
+    const busyHint = setTimeout(() => {
+      const light = this._hass.states[this._entity];
+      if (light && light.attributes.controller_busy) this._setStatus(BUSY_TEXT);
+    }, BUSY_HINT_DELAY_MS);
     try {
       await this._hass.callService(domain, service, data, target || { entity_id: this._entity }, false);
       this._setStatus(success);
@@ -145,6 +149,7 @@ class TrimlightEditor extends HTMLElement {
       this._setStatus(err.message || String(err), true);
       return false;
     } finally {
+      clearTimeout(busyHint);
       this._busy = false;
       this.busyChanged();
     }
@@ -493,6 +498,8 @@ const PAGE_TABS = [["patterns", "Patterns"], ["effects", "Effects"], ["music", "
 const REPEAT_CHIPS = [["today_only", "Today only"], ["every_day", "Every day"], ["weekdays", "Weekdays"], ["weekend", "Weekend"]];
 const SCHEDULE_PAUSE = "the controller takes about 15 seconds to confirm a schedule change";
 const SYNC_HINT_DELAY_MS = 500;
+const BUSY_TEXT = "The controller is busy with another app, probably the Trimlight app on a phone. It talks to one app at a time, so a change made here can take up to 30 seconds while Home Assistant waits for it to let go. Closing that app makes changes go through straight away.";
+const BUSY_HINT_DELAY_MS = 6000;
 const SLOW_CHANGE_MS = 1500;
 const CONTROLLER_NAME = /^[ a-zA-Z0-9_-]{1,25}$/;
 const portOk = (port, max) => Number.isInteger(port.start) && Number.isInteger(port.end) && port.start >= 1 && port.start <= port.end && port.end <= max;
@@ -748,7 +755,7 @@ const PAGE_STYLE = `
   .now .what { flex: 1 1 260px; min-width: 0; }
   .now b { font-size: 16px; font-weight: 500; }
   .now small { display: block; color: var(--muted); font-size: 13px; }
-  .paused { font-size: 12px; color: var(--warn); }
+  .busy-note { display: block; margin-top: 4px; font-size: 12px; color: var(--warn); }
   .modes { display: inline-flex; background: var(--surface-2); border-radius: 999px; padding: 3px; gap: 2px; }
   .modes button { display: flex; align-items: center; gap: 6px; border: 0; background: none; padding: 6px 12px; border-radius: 999px; color: var(--muted); font-weight: 500; }
   .modes button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
@@ -1136,10 +1143,10 @@ class TrimlightPanel extends HTMLElement {
     else if (current.kind === "builtin") detail = `Manual · built-in effect · brightness ${percent(current.brightness)}`;
     else if (current.kind === "pattern") detail = `Manual · ${modeLabel(current.mode)} · brightness ${percent(current.brightness)}`;
     else detail = "Manual";
-    const paused = light && light.attributes.polling_paused;
+    const busy = light && light.attributes.controller_busy;
     const modes = [["off", "power", "Off"], ["manual", "bulb", "Manual"], ["timer", "clock", "Timer"]];
     this._nowEl.innerHTML = `<div class="what"><b>${esc(mode === "off" ? "Lights off" : name || "Lights on")}</b><small>${esc(detail)}</small>
-        ${paused ? '<span class="paused">The phone app has the controller, so updates are paused for a few minutes.</span>' : ""}</div>
+        ${busy ? `<span class="busy-note" role="status">${esc(BUSY_TEXT)}</span>` : ""}</div>
       <div class="modes" role="group" aria-label="Mode">${modes.map(([key, ic, label]) => `<button type="button" data-act="mode" data-key="${key}" aria-pressed="${mode === key}">${icon(ic)}${label}</button>`).join("")}</div>`;
     this._tag.textContent = ["patterns", "effects", "music"].includes(this._s.tab) ? "Preview · approximate" : mode === "off" ? "Lights off" : "On the lights now · approximate";
   }
@@ -1342,8 +1349,7 @@ class TrimlightPanel extends HTMLElement {
       <div>
         <div class="card" style="margin-bottom:16px"><h2>Sound source</h2><p class="sub">Where the lights hear the music.</p>
           <div class="source">
-            <label><input type="radio" name="source" checked><span><b>The controller's audio input (AUX)</b><small>A line from your amplifier, or a small microphone, plugged into the controller. It listens itself, so the lights stay in time.${this._data.music.source === "aux" ? " Your controller is set up this way." : ""}</small></span></label>
-            <label><input type="radio" name="source" disabled><span><b>Music uploaded to Home Assistant</b> <span class="badge">Coming next</span><small>Home Assistant follows a speaker playing your uploaded music, with a delay slider to line the lights up.</small></span></label>
+            <label><span><b>The controller's audio input (AUX)</b><small>A line from your amplifier, or a small microphone, plugged into the controller. It listens itself, so the lights stay in time.${this._data.music.source === "aux" ? " Your controller is set up this way." : ""}</small></span></label>
           </div></div>
         <p class="count">${effects.length} music effects</p>
         <div class="mx-grid">${effects.map((m, i) => `<button type="button" class="mx" data-act="music" data-key="${i}" aria-pressed="${s.music === i}"><span class="eq">${bars(m, i)}</span><span class="name">${esc(m)}</span></button>`).join("")}</div>
