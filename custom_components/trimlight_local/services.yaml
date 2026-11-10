@@ -1,0 +1,391 @@
+show_saved_effect:
+  target:
+    entity:
+      integration: trimlight_local
+      domain: light
+  fields:
+    effect_id:
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+
+show_pattern:
+  target:
+    entity:
+      integration: trimlight_local
+      domain: light
+  fields:
+    mode:
+      required: true
+      example: chase_forward
+      selector: &pattern_mode
+        select:
+          translation_key: pattern_mode
+          options:
+            - static
+            - chase_forward
+            - chase_backward
+            - chase_middle_to_out
+            - chase_out_to_middle
+            - twinkle_fade
+            - fade
+            - comet_forward
+            - comet_backward
+            - comet_middle_to_out
+            - comet_out_to_middle
+            - wave_forward
+            - wave_backward
+            - wave_middle_to_out
+            - wave_out_to_middle
+            - strobe
+            - solid_fade
+            - full_strobe
+            - twinkle
+            - firework
+            - inside_out
+    colors:
+      required: true
+      example: '["red", "white", [0, 0, 255]]'
+      selector: &colors
+        object:
+    dots: &dots
+      example: 5
+      selector:
+        number:
+          min: 1
+          max: 90
+          mode: box
+    speed: &speed
+      selector:
+        number:
+          min: 0
+          max: 255
+    brightness: &brightness
+      selector:
+        number:
+          min: 0
+          max: 255
+
+save_effect:
+  target:
+    entity:
+      integration: trimlight_local
+      domain: light
+  fields:
+    name:
+      required: true
+      example: Porch red white blue
+      selector:
+        text:
+    mode:
+      example: chase_forward
+      selector: *pattern_mode
+    colors:
+      example: '["red", "white", [0, 0, 255]]'
+      selector: *colors
+    dots: *dots
+    speed: *speed
+    brightness: *brightness
+
+rename_saved_effect:
+  target:
+    entity:
+      integration: trimlight_local
+      domain: light
+  fields:
+    effect:
+      required: true
+      example: HALLOWEEN
+      selector:
+        text:
+    new_name:
+      required: true
+      example: Halloween
+      selector:
+        text:
+
+delete_saved_effect:
+  target:
+    entity:
+      integration: trimlight_local
+      domain: light
+  fields:
+    effect:
+      required: true
+      example: Porch red white blue
+      selector:
+        text:
+
+set_overlay:
+  target:
+    entity:
+      integration: trimlight_local
+      domain: light
+  fields:
+    effect:
+      required: true
+      example: HALLOWEEN
+      selector:
+        text:
+    overlay:
+      required: true
+      selector:
+        select:
+          translation_key: overlay
+          options:
+            - none
+            - lightning
+            - snow
+
+set_combined_effect:
+  target:
+    entity:
+      integration: trimlight_local
+      domain: light
+  fields:
+    effects:
+      required: true
+      example: '["CHRISTMAS", "Christmas Fireworks"]'
+      selector:
+        object:
+    interval:
+      required: true
+      default: 3
+      selector:
+        number:
+          min: 1
+          max: 10
+          unit_of_measurement: min
+
+set_schedule:
+  target:
+    entity:
+      integration: trimlight_local
+      domain: calendar
+  fields:
+    schedule_id:
+      selector:
+        number:
+          min: 1
+          max: 255
+          mode: box
+    effect:
+      required: true
+      example: CHRISTMAS
+      selector:
+        text:
+    start_date:
+      selector:
+        date:
+    end_date:
+      selector:
+        date:
+    holiday:
+      selector:
+        select:
+          translation_key: holiday
+          options:
+            - new_years_day
+            - mlk_day
+            - valentines_day
+            - presidents_day
+            - st_patricks_day
+            - mothers_day
+            - memorial_day
+            - fathers_day
+            - juneteenth
+            - independence_day
+            - labor_day
+            - grandparents_day
+            - columbus_day
+            - halloween
+            - election_day
+            - veterans_day
+            - thanksgiving
+            - christmas_eve
+            - christmas
+            - new_years_eve
+            - mardi_gras
+            - ash_wednesday
+            - palm_sunday
+            - good_friday
+            - easter
+            - pentecost
+            - orthodox_christmas
+            - orthodox_easter
+            - purim
+            - passover
+            - shavuot
+            - rosh_hashanah
+            - yom_kippur
+            - sukkot
+            - hanukkah
+            - eid_al_fitr
+            - eid_al_adha
+            - islamic_new_year
+            - mawlid
+            - holi
+            - buddha_purnima
+            - raksha_bandhan
+            - janmashtami
+            - ganesh_chaturthi
+            - dussehra
+            - diwali
+            - guru_nanak_jayanti
+            - lunar_new_year
+            - dragon_boat
+            - mid_autumn
+            - nowruz
+            - cinco_de_mayo
+            - canada_day
+            - nigeria_independence_day
+            - day_of_the_dead
+            - kwanzaa
+    holiday_start_offset: &holiday_offset
+      example: -2
+      selector:
+        number:
+          min: -60
+          max: 60
+          unit_of_measurement: days
+          mode: box
+    holiday_end_offset: *holiday_offset
+    waiting_id:
+      selector:
+        text:
+    on_time:
+      selector:
+        time:
+    on_sun: &sun_event
+      selector:
+        select:
+          translation_key: sun_event
+          options:
+            - sunset
+            - sunrise
+    on_offset: &sun_offset
+      example: -15
+      selector:
+        number:
+          min: -240
+          max: 240
+          unit_of_measurement: min
+          mode: box
+    off_time:
+      selector:
+        time:
+    off_sun: *sun_event
+    off_offset: *sun_offset
+
+delete_schedule:
+  target:
+    entity:
+      integration: trimlight_local
+      domain: calendar
+  fields:
+    schedule_id:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 255
+          mode: box
+
+set_daily_schedule:
+  target:
+    entity:
+      integration: trimlight_local
+      domain: light
+  fields:
+    schedule:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 2
+          mode: box
+    enabled:
+      selector:
+        boolean:
+    effect:
+      example: CHRISTMAS
+      selector:
+        text:
+    repeat:
+      selector:
+        select:
+          translation_key: repeat
+          options:
+            - today_only
+            - every_day
+            - weekdays
+            - weekend
+    on_time:
+      selector:
+        time:
+    on_sun: *sun_event
+    on_offset: *sun_offset
+    off_time:
+      selector:
+        time:
+    off_sun: *sun_event
+    off_offset: *sun_offset
+
+show_effect:
+  target:
+    entity:
+      integration: trimlight_local
+      domain: light
+  fields:
+    effect:
+      required: true
+      example: Rainbow Gradual Chase
+      selector:
+        text:
+    speed:
+      selector:
+        number:
+          min: 0
+          max: 255
+    length:
+      selector:
+        number:
+          min: 1
+          max: 90
+    reverse:
+      selector:
+        boolean:
+    brightness:
+      selector:
+        number:
+          min: 0
+          max: 255
+
+start_music:
+  target:
+    entity:
+      integration: trimlight_local
+      domain: light
+  fields:
+    effect:
+      required: true
+      example: Full Color Rhythm Spectrum
+      selector:
+        text:
+    color:
+      example: red
+      selector:
+        color_rgb:
+    length:
+      selector:
+        number:
+          min: 1
+          max: 150
+    sensitivity:
+      selector:
+        number:
+          min: 1
+          max: 16
