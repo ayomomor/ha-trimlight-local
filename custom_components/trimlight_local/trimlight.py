@@ -701,10 +701,25 @@ class TrimlightClient:
     async def set_combined_effect(self, combined: CombinedEffect) -> None:
         await self.send_passthrough(Sub.UPDATE_COMBINED_EFFECT, bytes((len(combined.effect_ids), *combined.effect_ids, combined.interval)))
 
+    async def stream_music(self, effect: int, color: tuple[int, int, int], length: int, sensitivity: int, bands: bytes) -> None:
+        """Send one frame of music bands from a phone-player source. These go out about ten times a second and get no reply, so they aren't paced like requests."""
+        frame = encode_frame(Command.MUSIC, encode_passthrough(Sub.MUSIC_DATA, _music_head(MusicSource.PHONE_PLAYER, effect, color, length, sensitivity) + bands))
+        async with self._lock:
+            try:
+                if not self.connected:
+                    await self._connect_waiting_locked(time.monotonic())
+                assert self._writer is not None
+                self._writer.write(frame)
+                await self._writer.drain()
+            except (OSError, ConnectionError, asyncio.TimeoutError) as err:
+                await self._close_locked()
+                raise TrimlightError(f"{self.host}: {err!r}") from err
+            self._touch()
+            self._release(LINGER_SECONDS)
+
     async def set_music(self, effect: int, color: tuple[int, int, int], length: int, sensitivity: int, source: MusicSource = MusicSource.AUX) -> None:
         """Start a music effect. The phone app streams 16 frequency bands in this layout; with the AUX source it sends one frame of zero bands and stops."""
-        head = bytes((source, _byte(effect), *(_byte(c) for c in color), max(1, min(150, length)), max(1, min(16, sensitivity))))
-        await self.send_passthrough(Sub.MUSIC_DATA, head + bytes(MUSIC_BANDS))
+        await self.send_passthrough(Sub.MUSIC_DATA, _music_head(source, effect, color, length, sensitivity) + bytes(MUSIC_BANDS))
 
     async def set_port(self, index: int, start: int, end: int, enabled: bool) -> None:
         """Set one output port's first and last dot, and whether it is used; the app sends one port per command."""
@@ -936,6 +951,10 @@ class TrimlightClient:
 
     def _touch(self) -> None:
         self._last_activity = time.monotonic()
+
+
+def _music_head(source: int, effect: int, color: tuple[int, int, int], length: int, sensitivity: int) -> bytes:
+    return bytes((source, _byte(effect), *(_byte(c) for c in color), max(1, min(150, length)), max(1, min(16, sensitivity))))
 
 
 def _byte(value: int) -> int:

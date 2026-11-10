@@ -60,6 +60,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: TrimlightConfigEntry) ->
     entry.async_on_unload(async_track_time_change(hass, coordinator.async_refresh_schedules, hour=SUN_UPDATE_HOUR, minute=0, second=0))
     entry.async_on_unload(coordinator.async_cancel_timers)
     entry.async_create_background_task(hass, coordinator.async_refresh_schedules(), "trimlight_local schedule dates and times")
+    coordinator.music.async_start()
     return True
 
 

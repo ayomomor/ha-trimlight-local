@@ -6,7 +6,8 @@ const BUILTINS = ["Rainbow Gradual Chase", "Rainbow Comet", "Rainbow Segment", "
 const STATE = {
   entities: { light: "light.porch", mode: "select.porch_mode", calendar: "calendar.porch_schedules" },
   switch_state: "off",
-  control: { lit: false, by: "you", until: "2026-11-10T03:00:00+00:00", window: null, hold_minutes: 60, hold_choices: [30, 60, 120, 240, null], trying: false },
+  control: { lit: false, by: "you", until: "2026-11-10T03:00:00+00:00", window: null, hold_minutes: 60, hold_choices: [30, 60, 120, 240, null], trying: false,
+    music: { on: false, speaker: null, delay_ms: 0, effect: 0, color: [255, 0, 0], length: 30, sensitivity: 13, status: "off", detail: null, title: null, delay_range: [-1000, 3000] } },
   modes: MODES.map((key) => ({ key, name: key.charAt(0).toUpperCase() + key.slice(1).replaceAll("_", " ") })),
   repeats: ["today_only", "every_day", "weekdays", "weekend"],
   combined_name: "Combined effect",
@@ -105,6 +106,7 @@ const hass = {
     "light.porch": { ...stamp("light.porch"), state: "off", attributes: { effect: "CANADA DAY", controller_busy: false, friendly_name: "Porch" } },
     "select.porch_mode": { ...stamp("select.porch_mode"), state: "off" },
     "calendar.porch_schedules": stamp("calendar.porch_schedules"),
+    "media_player.kitchen": { ...stamp("media_player.kitchen"), state: "idle", attributes: { friendly_name: "Kitchen" } },
   },
   entities: Object.fromEntries(["light.porch", "select.porch_mode", "calendar.porch_schedules"].map((id) => [id, { entity_id: id, platform: "trimlight_local", device_id: "dev1" }])),
   callWS: async (msg) => {
@@ -121,8 +123,12 @@ const hass = {
       STATE.waiting = STATE.waiting.filter((w) => w.id !== msg.waiting_id);
       return {};
     }
-    if (/^trimlight_local\/(try|hold_minutes)$/.test(msg.type)) {
+    if (/^trimlight_local\/(try|hold_minutes|music_follow)$/.test(msg.type)) {
       wsCalls.push(msg);
+      if (msg.type === "trimlight_local/music_follow") {
+        const { type, entity_id, ...changes } = msg;
+        Object.assign(STATE.control.music, changes);
+      }
       return {};
     }
     if (/^trimlight_local\/(led_test|led_setup|led_session_end|rename)$/.test(msg.type)) {
@@ -344,7 +350,7 @@ async function testPage() {
   // Music
   await tab("music");
   check("music: 18 effects and the AUX source", $$(".mx").length === 18 && $(".source label").textContent.includes("Your controller is set up this way"));
-  check("music: only the source that works is offered", $$(".source label").length === 1 && !$(".source .badge") && !$(".source input"));
+  check("music: two sources, AUX chosen, nothing marked as coming", $$(".source label").length === 2 && !$(".source .badge") && act("music-source", "aux").getAttribute("aria-pressed") === "true");
   const withBusy = (busy, stamp) => ({ ...hass, states: { ...hass.states, "light.porch": { ...hass.states["light.porch"], last_updated: stamp, attributes: { ...hass.states["light.porch"].attributes, controller_busy: busy } } } });
   page.hass = withBusy(true, "busy");
   await tick();
@@ -361,6 +367,25 @@ async function testPage() {
   await tick();
   check("music: Start sends the effect and settings",
     JSON.stringify(last().data) === JSON.stringify({ effect: "Single Color Pulse", length: 70, sensitivity: 13, color: [255, 0, 0] }), JSON.stringify(last()));
+  act("music-source", "ha").click();
+  await tick();
+  check("music: Home Assistant music asks for a speaker first", !!$('[data-in="follow-speaker"]') && [...$('[data-in="follow-speaker"]').options].some((o) => o.value === "media_player.kitchen" && o.textContent === "Kitchen") && act("follow", "on").disabled && $(".follow-status").textContent === "Pick the speaker that plays your music.");
+  await choose($('[data-in="follow-speaker"]'), "media_player.kitchen");
+  check("music: picking a speaker saves it", JSON.stringify(wsCalls.at(-1)) === JSON.stringify({ type: "trimlight_local/music_follow", entity_id: "light.porch", speaker: "media_player.kitchen" }), JSON.stringify(wsCalls.at(-1)));
+  STATE.control.music.speaker = "media_player.kitchen";
+  act("follow", "on").click();
+  await tick();
+  check("music: Follow music sends the effect, its settings and on", JSON.stringify(wsCalls.at(-1)) === JSON.stringify({ type: "trimlight_local/music_follow", entity_id: "light.porch", length: 70, sensitivity: 13, color: [255, 0, 0], effect: 7, on: true }), JSON.stringify(wsCalls.at(-1)));
+  STATE.control.music = { ...STATE.control.music, on: true, status: "following", title: "Jingle Bells" };
+  STATE.control.by = "music";
+  page.hass = { ...hass, states: { ...hass.states, "light.porch": { ...hass.states["light.porch"], last_updated: "music" } } };
+  await tick();
+  await tick();
+  check("music: it says what it follows, and the header too", $(".follow-status").textContent === "Following Kitchen: Jingle Bells." && $(".now small").textContent.startsWith("Following the music on Kitchen") && !!act("follow", "off"), $(".follow-status").textContent + " | " + $(".now small").textContent);
+  STATE.control.music = { ...STATE.control.music, on: false, status: "off", title: null };
+  STATE.control.by = "you";
+  page.hass = hass;
+  await tick();
 
   // Schedules
   await tab("schedules");

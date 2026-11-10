@@ -37,6 +37,7 @@ class FakeController:
         self.heartbeats = 0
         self.passthrough: list[tuple[int, bytes]] = []
         self.commands: list[tuple[int, bytes]] = []
+        self.music_frames: list[bytes] = []
         self.name = "Trimlight"
         # Set to model firmware that, like the app, refuses memory changes outside manual mode.
         self.writes_need_manual = False
@@ -128,6 +129,9 @@ class FakeController:
         if message.command == Command.HEARTBEAT:
             self.heartbeats += 1
             return MAGIC + bytes((Command.HEARTBEAT, 0, 0, 1, 0)) if self.answer_heartbeat else None
+        if message.command == Command.MUSIC:
+            self.music_frames.append(message.body)
+            return None
         if message.command == Command.RENAME:
             self.commands.append((message.command, message.body))
             self.name = message.body[1 : 1 + message.body[0]].decode("ascii")

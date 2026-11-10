@@ -865,6 +865,10 @@ const PAGE_STYLE = `
   .source { display: grid; gap: 8px; }
   .source label { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); border-radius: var(--radius-s); padding: 10px; }
   .source small { display: block; color: var(--muted); }
+  .source label[data-act] { cursor: pointer; }
+  .source label[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+  .follow { display: grid; gap: 10px; margin-top: 14px; }
+  .follow-status { margin: 0; font-weight: 500; }
 
   .sch-top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
   .year { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 18px; align-items: start; }
@@ -967,7 +971,7 @@ class TrimlightPanel extends HTMLElement {
     this._s = {
       tab: "patterns", source: null, draft: null, selected: 0, trying: false,
       fxQuery: "", fxMotion: "All", fxColour: "All", fx: null, fxSpeed: 100, fxLength: 30, fxReverse: false, fxBright: 255, fxName: "",
-      music: null, musicColour: "#ff0000", musicLength: 70, musicSens: 13,
+      music: null, musicColour: "#ff0000", musicLength: 70, musicSens: 13, musicSource: null,
       view: "year", month: new Date(today.getFullYear(), today.getMonth(), 1), drawer: null,
       daily: null, combined: null,
       led: null, ports: null, ctlName: null,
@@ -1161,6 +1165,10 @@ class TrimlightPanel extends HTMLElement {
   _controlText() {
     const c = this._data.control || {};
     if (c.trying) return "Trying a pattern · the lights go back when you stop";
+    if (c.by === "music") {
+      const id = c.music && c.music.speaker;
+      return `Following the music on ${(id && this._hass.states[id] && this._hass.states[id].attributes.friendly_name) || "a speaker"} · the lights go back when it stops`;
+    }
     if (c.by === "schedule") return c.window ? `By schedule until ${clockTime(c.window.end)}` : `By schedule · ${this._nextSchedule()}`;
     const who = c.by === "app" ? "Set in the Trimlight app" : "Set by you";
     return c.until ? `${who} · back to schedule at ${clockTime(c.until)}` : `${who} · stays until you change it`;
@@ -1176,7 +1184,7 @@ class TrimlightPanel extends HTMLElement {
     const name = this._showingName || (c.window && c.window.effect) || (light && light.attributes.effect)
       || (current.kind === "music" ? current.effect : current.kind === "color" ? "Solid colour" : current.kind === "builtin" ? current.effect : current.kind === "pattern" ? "Unsaved pattern" : "");
     const busy = light && light.attributes.controller_busy;
-    const held = c.by !== "schedule" && !c.trying;
+    const held = c.by !== "schedule" && c.by !== "music" && !c.trying;
     this._nowEl.innerHTML = `<div class="what"><b>${esc(lit ? name || "Lights on" : "Lights off")}</b><small>${esc(this._controlText())}</small>
         ${busy ? `<span class="busy-note" role="status">${esc(BUSY_TEXT)}</span>` : ""}</div>
       <div class="now-actions">
@@ -1391,12 +1399,30 @@ class TrimlightPanel extends HTMLElement {
     };
     const sel = s.music !== null && s.music >= 0 ? effects[s.music] : null;
     const single = sel && sel.startsWith("Single");
+    const follow = this._data.control.music;
+    const source = s.musicSource || (follow.on ? "ha" : "aux");
+    const speakers = Object.keys(this._hass.states).filter((id) => id.startsWith("media_player.")).map((id) => [id, this._hass.states[id].attributes.friendly_name || id]).sort((a, b) => a[1].localeCompare(b[1]));
+    const action = source === "ha"
+      ? (follow.on
+        ? `<button class="btn" type="button" data-act="follow" data-key="off">${icon("music")}Stop following</button>`
+        : `<button class="btn primary" type="button" data-act="follow" data-key="on" ${follow.speaker ? "" : "disabled"}>${icon("music")}Follow music</button>`)
+      : `<button class="btn primary" type="button" data-act="start-music">${icon("music")}Start music</button>`;
+    const hint = source === "ha"
+      ? (follow.on ? "Changes here apply straight away. When the song stops, the lights go back to what they were showing." : follow.speaker ? "Uses this effect whenever the speaker plays a song." : "Pick a speaker first.")
+      : "To stop, pick any pattern or effect, or turn the lights off.";
     return `<div class="split" style="margin-top:0">
       <div>
         <div class="card" style="margin-bottom:16px"><h2>Sound source</h2><p class="sub">Where the lights hear the music.</p>
           <div class="source">
-            <label><span><b>The controller's audio input (AUX)</b><small>A line from your amplifier, or a small microphone, plugged into the controller. It listens itself, so the lights stay in time.${this._data.music.source === "aux" ? " Your controller is set up this way." : ""}</small></span></label>
-          </div></div>
+            <label data-act="music-source" data-key="aux" aria-pressed="${source === "aux"}"><span><b>The controller's audio input (AUX)</b><small>A line from your amplifier, or a small microphone, plugged into the controller. It listens itself, so the lights stay in time.${this._data.music.source === "aux" ? " Your controller is set up this way." : ""}</small></span></label>
+            <label data-act="music-source" data-key="ha" aria-pressed="${source === "ha"}"><span><b>Music played through Home Assistant</b><small>The lights follow a speaker while it plays a song Home Assistant can read itself, such as a file in My media. Spotify and radio apps don't share their sound.</small></span></label>
+          </div>
+          ${source === "ha" ? `<div class="follow">
+            <label class="field"><span class="label">Speaker</span><select class="select" data-in="follow-speaker"><option value="">Pick a speaker</option>${speakers.map(([id, name]) => `<option value="${esc(id)}" ${id === follow.speaker ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label>
+            <div class="slider"><span class="label">Delay</span><input type="range" min="${follow.delay_range[0]}" max="${follow.delay_range[1]}" step="50" value="${follow.delay_ms}" data-in="follow-delay"><output>${follow.delay_ms} ms</output></div>
+            <p class="note">Raise the delay if the lights run ahead of the music, lower it if they lag behind.</p>
+            <p class="follow-status" role="status">${esc(this._followText())}</p>
+          </div>` : ""}</div>
         <p class="count">${effects.length} music effects</p>
         <div class="mx-grid">${effects.map((m, i) => `<button type="button" class="mx" data-act="music" data-key="${i}" aria-pressed="${s.music === i}"><span class="eq">${bars(m, i)}</span><span class="name">${esc(m)}</span></button>`).join("")}</div>
       </div>
@@ -1405,10 +1431,35 @@ class TrimlightPanel extends HTMLElement {
         <div class="row"><span class="label" style="width:92px">Colour</span><input type="color" data-in="music-colour" value="${s.musicColour}" ${single ? "" : "disabled"} style="width:44px;height:30px;border:0;background:none;padding:0">${single ? "" : '<span class="note">Only for single-colour effects</span>'}</div>
         <div class="slider"><span class="label">Length</span><input type="range" min="1" max="150" value="${s.musicLength}" data-in="music-length"><output>${s.musicLength}</output></div>
         <div class="slider"><span class="label">Sensitivity</span><input type="range" min="1" max="16" value="${s.musicSens}" data-in="music-sens"><output>${s.musicSens}</output></div>
-        <div class="actions"><button class="btn primary" type="button" data-act="start-music">${icon("music")}Start music</button></div>
-        <p class="note">To stop, pick any pattern or effect, or change the mode.</p>` : '<p class="note">Pick a music effect.</p>'}
+        <div class="actions">${action}</div>
+        <p class="note">${hint}</p>` : '<p class="note">Pick a music effect.</p>'}
       </div>
     </div>`;
+  }
+
+  _followText() {
+    const f = this._data.control.music;
+    const name = (id) => (id && this._hass.states[id] && this._hass.states[id].attributes.friendly_name) || id || "the speaker";
+    const speaker = name(f.speaker);
+    if (!f.on) return f.speaker ? `Not following ${speaker}.` : "Pick the speaker that plays your music.";
+    if (f.status === "following") return `Following ${speaker}${f.title ? `: ${f.title}` : ""}.`;
+    if (f.status === "loading") return `Getting the song on ${speaker} ready…`;
+    if (f.status === "unsupported") return `${speaker} is playing something the lights can't follow. ${f.detail || ""}`.trim();
+    if (f.status === "error") return `Stopped following: ${f.detail || "the controller didn't answer"}.`;
+    return f.detail ? `${f.detail}.` : `Waiting for ${speaker} to play a song.`;
+  }
+
+  _musicLook() {
+    const s = this._s;
+    const look = { length: s.musicLength, sensitivity: s.musicSens, color: [1, 3, 5].map((n) => parseInt(s.musicColour.slice(n, n + 2), 16)) };
+    if (s.music !== null && s.music >= 0) look.effect = s.music;
+    return look;
+  }
+
+  _sendFollow(fields) {
+    const f = this._data.control.music;
+    const before = { ...f };
+    return this._ws("music_follow", fields, null, { quiet: true, apply: () => Object.assign(f, fields), undo: () => Object.assign(f, before) });
   }
 
   /* Schedules */
@@ -1871,7 +1922,9 @@ class TrimlightPanel extends HTMLElement {
       case "reverse": s.fxReverse = key === "1"; this._call(DOMAIN, "show_effect", this._effectData(), null, `Showing ${data.builtins[s.fx]}.`, { reload: false }); break;
       case "show-effect": this._call(DOMAIN, "show_effect", this._effectData(), null, `Showing ${data.builtins[s.fx]}.`, { reload: false }); return;
       case "save-effect": this._saveEffect(); return;
-      case "music": s.music = Number(key); break;
+      case "music": s.music = Number(key); if (data.control.music.on && (s.musicSource || "ha") === "ha") this._sendFollow(this._musicLook()); break;
+      case "music-source": s.musicSource = key; break;
+      case "follow": this._sendFollow({ ...this._musicLook(), on: key === "on" }); return;
       case "roofline":
         data.roofline = key;
         this._hass.callWS({ type: `${DOMAIN}/roofline`, entity_id: this._entity, roofline: key }).catch((err) => this._toast(err.message || String(err), true));
@@ -1966,6 +2019,7 @@ class TrimlightPanel extends HTMLElement {
       case "fx-name": s.fxName = t.value; return;
       case "music-length": s.musicLength = number(); out.textContent = t.value; return;
       case "music-sens": s.musicSens = number(); out.textContent = t.value; return;
+      case "follow-delay": out.textContent = `${t.value} ms`; return;
       case "combined-interval": s.combined.interval = number(); s.combined.dirty = true; out.textContent = `${t.value} min`; return;
       case "clock": { this._timeTarget(t.dataset.key).clock = t.value; this._markDaily(t.dataset.key); return; }
       case "offset": {
@@ -2003,7 +2057,10 @@ class TrimlightPanel extends HTMLElement {
       case "try": this._setTrying(t.checked); return;
       case "fx-colour": s.fxColour = t.value; break;
       case "fx-speed": case "fx-length": case "fx-bright": this._call(DOMAIN, "show_effect", this._effectData(), null, `Showing ${this._data.builtins[s.fx]}.`, { reload: false }); return;
-      case "music-colour": s.musicColour = t.value; break;
+      case "music-colour": s.musicColour = t.value; if (this._data.control.music.on) this._sendFollow(this._musicLook()); break;
+      case "music-length": case "music-sens": if (this._data.control.music.on) this._sendFollow(this._musicLook()); return;
+      case "follow-speaker": this._sendFollow({ speaker: t.value || null, ...(t.value ? {} : { on: false }) }); break;
+      case "follow-delay": this._sendFollow({ delay_ms: Number(t.value) }); return;
       case "drawer-effect": s.drawer.effect = t.value; return;
       case "drawer-holiday": s.drawer.holiday = t.value; this._refreshHolidayPreview(); return;
       case "drawer-month": s.drawer[t.dataset.key][0] = Number(t.value); return;

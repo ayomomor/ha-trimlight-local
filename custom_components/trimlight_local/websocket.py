@@ -16,6 +16,7 @@ from homeassistant.const import SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET
 
 from .const import COMBINED_EFFECT_NAME, DOMAIN, MUSIC_EFFECTS, PATTERN_MODES, REPEATS, ROOFLINES
 from .control import HOLD_CHOICES
+from .music import DELAY_RANGE_MS
 from .coordinator import TrimlightCoordinator, writable_from
 from .holiday_rules import HOLIDAYS, HolidayRule
 from .sun import SunTime, now, window_times
@@ -53,6 +54,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_waiting_delete)
     websocket_api.async_register_command(hass, ws_try)
     websocket_api.async_register_command(hass, ws_hold_minutes)
+    websocket_api.async_register_command(hass, ws_music_follow)
 
 
 @websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/state", vol.Required("entity_id"): cv.entity_id})
@@ -160,6 +162,25 @@ async def ws_try(hass: HomeAssistant, connection: websocket_api.ActiveConnection
 @websocket_api.async_response
 async def ws_hold_minutes(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     await _run_on_controller(hass, connection, msg, lambda c: c.async_set_hold_minutes(msg["minutes"]))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/music_follow",
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Optional("on"): bool,
+        vol.Optional("speaker"): vol.Any(None, cv.entity_domain("media_player")),
+        vol.Optional("delay_ms"): vol.All(int, vol.Range(min=DELAY_RANGE_MS[0], max=DELAY_RANGE_MS[1])),
+        vol.Optional("effect"): vol.All(int, vol.Range(min=0, max=len(MUSIC_EFFECTS) - 1)),
+        vol.Optional("color"): vol.All([vol.All(int, vol.Range(min=0, max=255))], vol.Length(min=3, max=3)),
+        vol.Optional("length"): vol.All(int, vol.Range(min=1, max=150)),
+        vol.Optional("sensitivity"): vol.All(int, vol.Range(min=1, max=16)),
+    }
+)
+@websocket_api.async_response
+async def ws_music_follow(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    changes = {k: tuple(v) if k == "color" else v for k, v in msg.items() if k not in ("id", "type", "entity_id")}
+    await _run_on_controller(hass, connection, msg, lambda c: c.music.async_set(**changes))
 
 
 def describe(coordinator: TrimlightCoordinator, entity_ids: dict[str, str]) -> dict[str, Any]:

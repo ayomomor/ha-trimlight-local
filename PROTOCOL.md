@@ -42,7 +42,7 @@ offset  size  field
 | 0x07 | rename device: body `[n] + UTF-8 name`, where n is the name's UTF-16 length, max 25 characters [0x6b7a34] |
 | 0x08 | full-state write (大数据透传): body `16 | len(2) | state` [0x687f9c, 0x69f7d8], see "Full-state write" |
 | 0x09 | MCU firmware update; extra = `[ver hi, ver lo, flag]` |
-| 0x0a | music stream: body in the sub 0x0c layout [0x3ac4e4] |
+| 0x0a | music stream: a pass-through body with sub 0x0c, see "Music" [0x3ac4e4] |
 | 0x0b | heartbeat, body `[0x01]` [0x43f510] |
 
 ### Pass-through body (cmd 0x04)
@@ -192,7 +192,19 @@ Sub 0x0c data, 23 bytes [0x62c714]:
 | 6 | sensitivity 1..16 |
 | 7..22 | 16 frequency bands |
 
-The phone streams the bands with cmd 0x0a about 10 times a second. With the AUX source it sends one cmd 0x04 frame with zero bands and nothing more [0x4316bc], so the controller presumably runs music effects on its own *(inferred, untested)*.
+With the AUX source the app sends one cmd 0x04 frame with zero bands and nothing more [0x4316bc]. The controller switches to the music effect at once (tested) and presumably runs it from its own input *(inferred)*.
+
+With the phone player or microphone source the app streams the bands:
+
+- **Frame**: cmd 0x0a in the normal long SPTECH frame [0x62c714 → 0x627af4 → 0x43f8cc]. Its body is the pass-through body with sub 0x0c: `0c 00 17` and then the 23 bytes above, 26 bytes in all [0x627c64]. Only the command byte differs from a cmd 0x04 frame.
+- **Rate**: one frame every 100 ms; nothing is answered or awaited. Effect, colour, length and sensitivity changes go out in the next frame.
+- **Quiet**: a frame is only sent if a band is at least 10 [0x3aa41c, predicate 0x3ac688]. Pausing or stopping sends nothing more.
+- **Before streaming**: opening the music page or changing the source sends one cmd 0x04 / sub 0x0c frame with zero bands and the new source [0x4316bc]. The app sends music only in manual mode [0x643004].
+- **Microphone bands** (`com.spled.audio_recorder`, Java): 44.1 kHz mono, a 1024-point FFT every 100 ms without a window, and the mean magnitude over 16 bands with edges 50, 100, 160, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000 and 5000 Hz. The magnitude is weighted toward the middle bands (0.37 at the ends, 1.10 in the middle), cast to a byte without clamping, then lowered by 15 in Dart [0x3ac6ac].
+- **Player bands** (`com.spled.audio_player`, ExoPlayer with a custom audio processor): a 4096-sample FFT, a weighted average of power over 16 bands from 20 Hz up, and `min(round(avg / 12500 × 255), 255)`.
+- The phone never uses the sensitivity value; it only forwards it.
+
+Home Assistant's version uses the microphone's band edges and scales each band's level in decibels below the song's loudest moments to 0–255.
 
 The music effects, by number: 0 Full Color Rhythm Spectrum, 1 Single Color Rhythm Spectrum, 2 Full Color Rhythm Twinkle, 3 Single Color Rhythm Twinkle, 4 Gradient Energy, 5 Single Color Energy, 6 Gradient Pulse, 7 Single Color Pulse, 8 Full Color Ejection Forward, 9 Single Color Ejection Forward, 10 Full Color Ejection Backward, 11 Single Color Ejection Backward, 12 Full Color VuMeter, 13 Single Color VuMeter, 14 Independence Day, 15 Christmas, 16 HeatBeat, 17 Party [pp 0x249f8].
 

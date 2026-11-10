@@ -49,6 +49,9 @@
       },
       "effect_pixel_len": {
         "name": "Effect length"
+      },
+      "music_delay": {
+        "name": "Music delay"
       }
     },
     "switch": {
@@ -57,6 +60,9 @@
       },
       "daily_schedule_enabled": {
         "name": "Daily schedule {number}"
+      },
+      "follow_music": {
+        "name": "Follow music"
       }
     },
     "time": {
