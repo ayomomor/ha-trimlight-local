@@ -42,7 +42,7 @@ offset  size  field
 | 0x07 | rename device: body `[n] + UTF-8 name`, where n is the name's UTF-16 length, max 25 characters |
 | 0x08 | full-state write: body `16 | len(2) | state`, see "Full-state write" |
 | 0x09 | MCU firmware update; extra = `[ver hi, ver lo, flag]` |
-| 0x0a | music stream: body in the sub 0x0c layout |
+| 0x0a | music stream: a pass-through body with sub 0x0c, see "Music" |
 | 0x0b | heartbeat, body `[0x01]` |
 
 ### Pass-through body (cmd 0x04)
@@ -188,7 +188,18 @@ Sub 0x0c data, 23 bytes:
 | 6 | sensitivity 1..16 |
 | 7..22 | 16 frequency bands |
 
-The phone streams the bands with cmd 0x0a about 10 times a second. With the AUX source it sends one cmd 0x04 frame with zero bands and nothing more, so the controller presumably runs music effects on its own *(inferred, untested)*.
+With the AUX source the app sends one cmd 0x04 frame with zero bands and nothing more. The controller switches to the music effect at once (tested) and presumably runs it from its own input *(inferred)*.
+
+With the phone player or microphone source the app streams the bands:
+
+- **Frame**: cmd 0x0a in the normal long SPTECH frame. Its body is the pass-through body with sub 0x0c: `0c 00 17` and then the 23 bytes above, 26 bytes in all. Only the command byte differs from a cmd 0x04 frame.
+- **Rate**: one frame every 100 ms; nothing is answered or awaited. Effect, colour, length and sensitivity changes go out in the next frame.
+- **Quiet**: a frame is only sent if a band is at least 10. Pausing or stopping sends nothing more.
+- **Before streaming**: opening the music page or changing the source sends one cmd 0x04 / sub 0x0c frame with zero bands and the new source. The app sends music only in manual mode.
+- **Bands**: 16 levels, 0..255. The microphone source uses bands with edges 50, 100, 160, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000 and 5000 Hz.
+- The sender does not apply the sensitivity; it only forwards it.
+
+Home Assistant's version uses the microphone's band edges and scales each band's level in decibels below the song's loudest moments to 0–255.
 
 The music effects, by number: 0 Full Color Rhythm Spectrum, 1 Single Color Rhythm Spectrum, 2 Full Color Rhythm Twinkle, 3 Single Color Rhythm Twinkle, 4 Gradient Energy, 5 Single Color Energy, 6 Gradient Pulse, 7 Single Color Pulse, 8 Full Color Ejection Forward, 9 Single Color Ejection Forward, 10 Full Color Ejection Backward, 11 Single Color Ejection Backward, 12 Full Color VuMeter, 13 Single Color VuMeter, 14 Independence Day, 15 Christmas, 16 HeatBeat, 17 Party.
 

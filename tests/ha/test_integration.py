@@ -23,6 +23,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.trimlight_local.const import DOMAIN
 from custom_components.trimlight_local.control import Hold
+from custom_components.trimlight_local.music import band_frames, song_source
 from custom_components.trimlight_local.effects import BUILTIN_EFFECTS
 from custom_components.trimlight_local.holiday_rules import HolidayDates, HolidayRule, HolidayRules
 from custom_components.trimlight_local.sun import SunRules, SunTime
@@ -1103,6 +1104,102 @@ async def test_device_code_is_learnt_for_later(hass: HomeAssistant, controller) 
         entry = await setup_entry(hass)
         await hass.async_block_till_done()
     assert entry.data["device_code"] == "TL-9"
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+def tone(seconds: float, hz: float, rate: int = 22050) -> bytes:
+    import math
+    import struct
+
+    return b"".join(struct.pack("<h", int(12000 * math.sin(2 * math.pi * hz * n / rate))) for n in range(int(seconds * rate)))
+
+
+def test_song_source_and_bands(hass: HomeAssistant, tmp_path: Path) -> None:
+    hass.config.media_dirs = {"local": str(tmp_path)}
+    assert song_source(hass, "media-source://media_source/local/Songs/Jingle Bells.mp3") == str((tmp_path / "Songs" / "Jingle Bells.mp3").resolve())
+    assert song_source(hass, "http://192.168.1.10:8123/media/local/Songs/Jingle%20Bells.mp3?authSig=abc") == str((tmp_path / "Songs" / "Jingle Bells.mp3").resolve())
+    assert song_source(hass, "https://example.com/song.mp3") == "https://example.com/song.mp3"
+    assert song_source(hass, "media-source://media_source/local/../../etc/passwd") is None
+    assert song_source(hass, "spotify:track:123") is None
+    assert song_source(hass, "media-source://radio_browser/abc") is None
+
+    frames = band_frames(tone(1.0, 100) + tone(1.0, 3000))
+    assert len(frames) == 20 and all(len(f) == 16 for f in frames)
+    low, high = frames[5], frames[15]
+    assert max(range(16), key=lambda i: low[i]) < 4 < 10 < max(range(16), key=lambda i: high[i])
+
+
+async def test_music_follows_a_speaker(hass: HomeAssistant, controller, hass_ws_client, tmp_path: Path) -> None:
+    use_fixture(controller, "sync_reply.hex")
+    controller.switch_state = 2
+    hass.config.media_dirs = {"local": str(tmp_path)}
+    song = "media-source://media_source/local/song.mp3"
+    with patch("custom_components.trimlight_local.music.async_decode", return_value=tone(30, 200)):
+        entry = await setup_entry(hass)
+        coordinator = entry.runtime_data
+        hass.states.async_set("media_player.kitchen", "idle", {"friendly_name": "Kitchen"})
+        ws = await hass_ws_client(hass)
+        await ws.send_json({"id": 1, "type": "trimlight_local/music_follow", "entity_id": LIGHT, "speaker": "media_player.kitchen", "on": True, "effect": 1, "color": [0, 0, 255], "delay_ms": 200})
+        assert (await ws.receive_json())["success"]
+        await settle(hass)
+        assert hass.states.get("switch.porch_follow_music").state == STATE_ON
+        assert coordinator.music.status == "waiting"
+
+        hass.states.async_set("media_player.kitchen", "playing", {"media_content_id": song, "media_position": 3, "media_position_updated_at": dt_util.utcnow(), "media_title": "Jingle Bells"})
+        await wait_for(lambda: len(controller.music_frames) >= 5)
+        assert controller.switch_state == 1
+        assert controller.passthrough[-1][0] == Sub.MUSIC_DATA and controller.passthrough[-1][1][:5] == bytes((0, 1, 0, 0, 255))
+        # As the phone app sends them: the sub-command 0x0c header, then the 23 bytes of music settings and bands.
+        assert all(len(f) == 26 and f[:8] == bytes((0x0C, 0, 23, 0, 1, 0, 0, 255)) for f in controller.music_frames)
+        assert all(max(f[10:]) >= 10 for f in controller.music_frames)
+        state = hass.states.get(LIGHT)
+        assert (state.state, state.attributes["controlled_by"]) == (STATE_ON, "music")
+        await ws.send_json({"id": 2, "type": "trimlight_local/state", "entity_id": LIGHT})
+        page = (await ws.receive_json())["result"]
+        assert (page["control"]["music"]["status"], page["control"]["music"]["title"]) == ("following", "Jingle Bells")
+
+        hass.states.async_set("media_player.kitchen", "paused", {"media_content_id": song, "media_position": 5})
+        await wait_for(lambda: controller.switch_state == 2)
+        await settle(hass)
+        sent = len(controller.music_frames)
+        await asyncio.sleep(0.3)
+        assert len(controller.music_frames) == sent
+        assert coordinator.trial is None and coordinator.hold is None
+        assert hass.states.get(LIGHT).attributes["controlled_by"] == "schedule"
+
+        hass.states.async_set("media_player.kitchen", "playing", {"media_content_id": song, "media_position": 5, "media_position_updated_at": dt_util.utcnow()})
+        await wait_for(lambda: controller.switch_state == 1 and coordinator.music.following)
+        await hass.services.async_call(LIGHT_DOMAIN, "turn_on", {ATTR_ENTITY_ID: LIGHT, ATTR_EFFECT: "Rainbow Wave"}, blocking=True)
+        await settle(hass)
+        assert not coordinator.music.following and coordinator.trial is None
+        assert hass.states.get(LIGHT).attributes["controlled_by"] == "you"
+        sent = len(controller.music_frames)
+        await asyncio.sleep(0.3)
+        assert len(controller.music_frames) == sent
+
+        await hass.services.async_call(SWITCH_DOMAIN, "turn_off", {ATTR_ENTITY_ID: "switch.porch_follow_music"}, blocking=True)
+        await settle(hass)
+        assert coordinator.music.status == "off"
+        stored = await coordinator._page_store.async_load()
+        assert (stored["music"]["speaker"], stored["music"]["on"], stored["music"]["delay_ms"]) == ("media_player.kitchen", False, 200)
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_music_from_spotify_is_not_followed(hass: HomeAssistant, controller) -> None:
+    use_fixture(controller, "sync_reply.hex")
+    controller.switch_state = 2
+    entry = await setup_entry(hass)
+    coordinator = entry.runtime_data
+    hass.states.async_set("media_player.kitchen", "idle", {})
+    await coordinator.music.async_set(speaker="media_player.kitchen", on=True)
+    hass.states.async_set("media_player.kitchen", "playing", {"media_content_id": "spotify:track:123"})
+    await wait_for(lambda: coordinator.music.status == "unsupported")
+    assert "Spotify" in coordinator.music.detail
+    assert controller.switch_state == 2 and not controller.music_frames
 
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()

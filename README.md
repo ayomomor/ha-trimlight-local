@@ -83,6 +83,7 @@ Tested with Home Assistant 2026.10 and 2026.11.
   - `show_effect`: one of the 180 built-in effects with its speed, length, direction and brightness, in one command.
   - `start_music`: one of the 18 music effects, driven by the controller's audio input. Colour, length and sensitivity are optional and keep the controller's current settings.
   - `show_saved_effect`: shows a saved effect by its slot number (`effect_id`).
+- **Follow music** switch and **Music delay** setting: see [Music played through Home Assistant](#music-played-through-home-assistant).
 - **Actions on the calendar**: `set_schedule` adds a schedule, or changes one when given its `schedule_id`; `delete_schedule` deletes one.
 - **Pattern editor card** for your dashboards, like the app's pattern editor. See below.
 - **Light attributes**:
@@ -148,6 +149,17 @@ action: trimlight_local.keep_change
 target:
   entity_id: light.roofline
 ```
+
+### Music played through Home Assistant
+
+The lights can follow a speaker, the way the phone app follows its own music player. Pick the speaker and a music effect on the Trimlight page's **Music** tab, choose **Music played through Home Assistant**, and tap **Follow music** (or turn on the **Follow music** switch).
+
+- **What it follows**: songs Home Assistant can read itself, such as files in **My media** or a web address the speaker plays. Spotify, radio apps and other services don't share their sound, so the page says it can't follow them.
+- **How**: Home Assistant decodes the song, splits it into the 16 frequency bands the phone app uses, and sends them to the controller ten times a second, in time with where the speaker says it is in the song.
+- **Delay**: speakers buffer, so the lights may run ahead. Raise **Music delay** until they match; lower it if they lag.
+- **When the song stops or is paused**, the lights go back to what they were showing before, schedule included.
+- **Changing the lights during a song** takes over for the rest of that song; the next song is followed again.
+- **The phone app** can't connect while a song is followed, because Home Assistant stays connected to stream it.
 
 ### Sunrise and sunset times
 
@@ -239,7 +251,7 @@ The integration adds **Trimlight** to the sidebar, a local stand-in for the phon
 - **Effects**: all 180 built-in effects.
   - Search, filter by motion (snake, wave, comet…) or colour, and star favourites; favourites are kept in Home Assistant.
   - Tapping one shows it on the lights. Speed, length, brightness and direction sit beside it, and **Save** puts it in the controller's library so schedules can use it.
-- **Music**: the 18 music effects, driven by the controller's own audio (AUX) input, with colour, length and sensitivity.
+- **Music**: the 18 music effects, with colour, length and sensitivity, driven by the controller's own audio (AUX) input or by a speaker playing music through Home Assistant.
 - **Schedules**:
   - Views: **Year** (12 small months, coloured like each schedule's pattern), **Month** (multi-day bars) and **List**.
   - Click a day to open its schedule, or to add one starting that day. The editor opens at the side.
@@ -317,7 +329,7 @@ In the card:
   - one calendar schedule per date;
   - the two daily schedules can't overlap;
   - an effect used by a schedule or the combined effect can't be deleted.
-- Music mode follows the controller's own audio input. Following music played through Home Assistant isn't built yet.
+- Following music played through Home Assistant needs the song itself, so it can't follow Spotify, radio apps or other streaming services.
 - Changing the colour order and renaming the controller have been tested on a real controller. Changing the chip type or the ports follows the app's byte layout, but hasn't been tried on one yet. The one-minute trial is there so a wrong setting puts itself back.
 - Not included:
   - Wi-Fi setup;
@@ -334,7 +346,7 @@ logger:
 ## Tests
 
 - **Client and protocol**: `python -m unittest discover -s tests` (no dependencies).
-- **Home Assistant integration**: `pip install pytest-homeassistant-custom-component holidays`, then `pytest` from this folder. Run the client tests separately: Home Assistant's test plugin blocks the local socket they use.
+- **Home Assistant integration**: `pip install pytest-homeassistant-custom-component holidays numpy`, then `pytest` from this folder. Run the client tests separately: Home Assistant's test plugin blocks the local socket they use.
 - **Page and card**: open `tests/card/harness.html#test` in a browser. It clicks through the card and every tab of the page against a simulated Home Assistant, and lists PASS/FAIL lines.
   - `#card` shows the card.
   - `#page-schedules` (or `patterns`, `daily`, `combined`) shows a tab.

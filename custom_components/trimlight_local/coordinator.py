@@ -21,6 +21,7 @@ from homeassistant.util import dt as dt_util
 from .const import COMBINED_EFFECT_NAME, CONF_DEVICE_CODE, DEFAULT_PIXEL_LEN, DEFAULT_SPEED, DOMAIN, ROOFLINES, SCAN_INTERVAL
 from .control import BY_APP, BY_SCHEDULE, BY_YOU, DEFAULT_HOLD_MINUTES, HOLD_CHOICES, Hold, Window, lit_window, next_change
 from .effects import BUILTIN_EFFECTS
+from .music import FollowSettings, MusicFollower
 from .holiday_rules import HOLIDAYS, HolidayDates, HolidayRule, HolidayRules, WaitingSchedule, holiday_name, is_us_holiday
 from .sun import SunRule, SunRules, SunTime, TimeSetting, now, rule_for, window_times
 from .trimlight import (
@@ -45,6 +46,7 @@ from .trimlight import (
     SwitchState,
     SyncState,
     ControllerBusy,
+    MusicSource,
     TrimlightClient,
     TrimlightError,
     discover,
@@ -100,11 +102,12 @@ class LedSession:
 
 @dataclass
 class Trial:
-    """Patterns tried on the lights from the page: what to put back when the trying ends."""
+    """Patterns tried on the lights from the page, or music followed from a speaker: what to put back when it ends."""
 
     switch_state: int
     effect: CurrentEffect | None
     hold: Hold | None
+    kind: str = "try"
     cancel: CALLBACK_TYPE | None = None
 
 
@@ -143,6 +146,7 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         self._hold_timer: CALLBACK_TYPE | None = None
         self._last_find: datetime | None = None
         self._learnt_device_code = False
+        self.music = MusicFollower(self)
 
     async def async_load_stored(self) -> None:
         await self.sun.async_load()
@@ -155,6 +159,7 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         if page.get("hold_minutes", DEFAULT_HOLD_MINUTES) in HOLD_CHOICES:
             self.hold_minutes = page.get("hold_minutes", DEFAULT_HOLD_MINUTES)
         self.hold = Hold.from_dict(page.get("hold"))
+        self.music.settings = FollowSettings.from_dict(page.get("music"))
 
     async def async_set_favourites(self, favourites: list[int]) -> None:
         """Built-in effects starred on the Trimlight page; kept in Home Assistant so every device sees the same ones."""
@@ -175,10 +180,22 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
             "roofline": self.roofline,
             "hold_minutes": self.hold_minutes,
             "hold": None if self.hold is None else self.hold.as_dict(),
+            "music": {**dataclasses.asdict(self.music.settings), "color": list(self.music.settings.color)},
         }
 
+    def save_settings(self) -> None:
+        self._page_store.async_delay_save(self._page_data, 1)
+
+    def ffmpeg_binary(self) -> str:
+        try:
+            from homeassistant.components.ffmpeg import get_ffmpeg_manager  # noqa: PLC0415
+
+            return get_ffmpeg_manager(self.hass).binary
+        except (ImportError, KeyError):
+            return "ffmpeg"
+
     async def _async_update_data(self) -> SyncState:
-        if self.data is not None and self._write_lock.locked():
+        if self.data is not None and (self._write_lock.locked() or self.music.following):
             # A change is being read back, and the controller may be silent for a while after one.
             return self.data
         try:
@@ -305,7 +322,7 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         if data.switch_state == SwitchState.TIMER:
             return BY_SCHEDULE
         if self.trial is not None:
-            return BY_YOU
+            return "music" if self.trial.kind == "music" else BY_YOU
         return self.hold.by if self.hold is not None else BY_APP
 
     @property
@@ -326,7 +343,8 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
             "window": None if lit is None else {"effect": self.saved_effect_name(lit.effect_id), "effect_id": lit.effect_id, "end": lit.end.isoformat()},
             "hold_minutes": self.hold_minutes,
             "hold_choices": list(HOLD_CHOICES),
-            "trying": self.trial is not None,
+            "trying": self.trial is not None and self.trial.kind == "try",
+            "music": self.music.summary(),
         }
 
     def _suspended(self) -> bool:
@@ -354,6 +372,9 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
             self._page_store.async_delay_save(self._page_data, 1)
 
     def _note_change(self, switch_state: int) -> None:
+        if self.trial is not None and self.trial.kind == "music":
+            self.trial = None
+            self.music.user_took_over()
         if self._suspended():
             if self.trial is not None:
                 self._restart_trial_timer()
@@ -419,15 +440,41 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         if self.trial is None:
             data = self._require_data()
             self.trial = Trial(data.switch_state, data.current_effect, self.hold)
+        elif self.trial.kind == "music":
+            self.trial.kind = "try"
+            self.music.user_took_over()
         self._restart_trial_timer()
         self.async_update_listeners()
 
     def _restart_trial_timer(self) -> None:
-        if (trial := self.trial) is None:
+        if (trial := self.trial) is None or trial.kind != "try":
             return
         if trial.cancel:
             trial.cancel()
         trial.cancel = async_call_later(self.hass, TRIAL_SECONDS, HassJob(self._trial_expired, cancel_on_shutdown=True))
+
+    async def async_begin_music(self, settings: FollowSettings) -> None:
+        """Put the lights on the music effect for streamed bands, remembering what they showed so the end of the music puts it back."""
+        data = self._require_data()
+        if self.trial is None:
+            self.trial = Trial(data.switch_state, data.current_effect, self.hold, kind="music")
+        elif self.trial.kind != "music":
+            if self.trial.cancel:
+                self.trial.cancel()
+            self.trial.cancel = None
+            self.trial.kind = "music"
+        if data.switch_state != SwitchState.MANUAL:
+            await _run(self.client.set_switch_state(SwitchState.MANUAL))
+        await _run(self.client.set_music(settings.effect, settings.color, settings.length, settings.sensitivity, MusicSource.PHONE_PLAYER))
+        self.async_set_updated_data(dataclasses.replace(data, switch_state=SwitchState.MANUAL, current_effect=CurrentEffect(CATEGORY_MUSIC, settings.effect, 0, 0, 0, False, b"")))
+
+    async def async_end_music(self, *, restore: bool) -> None:
+        if self.trial is None or self.trial.kind != "music":
+            return
+        if restore:
+            await self._async_end_trial()
+        else:
+            self.trial = None
 
     @callback
     def _trial_expired(self, _: datetime) -> None:
@@ -831,6 +878,7 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         if self.trial is not None and self.trial.cancel is not None:
             self.trial.cancel()
             self.trial.cancel = None
+        self.music.async_shutdown()
 
     async def async_refresh_holiday_dates(self) -> None:
         """Put each holiday schedule on the controller for the next nights it gets, once the last ones have passed.
