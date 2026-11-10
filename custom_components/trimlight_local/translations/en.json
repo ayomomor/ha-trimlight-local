@@ -5,7 +5,10 @@
         "title": "Trimlight Edge",
         "description": "Enter the controller's IP address. Controllers found on this network: {found}.",
         "data": {
-          "host": "Host"
+          "host": "IP address"
+        },
+        "data_description": {
+          "host": "The controller's address on your home network, such as 192.168.1.50."
         }
       }
     },
@@ -354,6 +357,14 @@
           "description": "1-16."
         }
       }
+    },
+    "resume_schedule": {
+      "name": "Back to schedule",
+      "description": "Hands the lights back to the controller's schedules (timer mode) now, ending a change made by hand."
+    },
+    "keep_change": {
+      "name": "Keep change",
+      "description": "Makes the change showing now last until something else is changed, instead of going back to the schedules after a while."
     }
   },
   "selector": {

@@ -3,7 +3,7 @@
  * Served and registered by the integration itself. It has no dependencies, so it works without internet access.
  *
  * Card:  type: custom:trimlight-pattern-card
- *        entity: light.trimlight_192_168_10_66
+ *        entity: light.roofline
  */
 
 const DOMAIN = "trimlight_local";
@@ -223,7 +223,7 @@ class TrimlightPatternEditor extends TrimlightEditor {
     this._frame(
       el("div", { class: "row" }, el("label", {}, "Edit"), this._sourceSelect()),
       el("div", { class: "row" }, el("label", {}, "Name"),
-        el("input", { type: "text", maxLength: limits.name, value: draft.name, placeholder: "Name to save it under", oninput: (ev) => { draft.name = ev.target.value; this.busyChanged(); } })),
+        el("input", { type: "text", maxLength: limits.name, value: draft.name, placeholder: "e.g. Fourth of July", oninput: (ev) => { draft.name = ev.target.value; this.busyChanged(); } })),
       el("div", { class: "row" }, el("label", {}, "Mode"), this._modeSelect()),
       this._strip,
       this._palette(),
@@ -453,7 +453,7 @@ class TrimlightPatternCard extends HTMLElement {
   }
 
   setConfig(config) {
-    if (!config || !config.entity) throw new Error("Set entity to a Trimlight light, for example light.trimlight_192_168_10_66");
+    if (!config || !config.entity) throw new Error("Set entity to a Trimlight light, for example light.roofline");
     this._config = config;
     if (this._header) this._header.textContent = config.title || "Trimlight patterns";
   }
@@ -498,6 +498,8 @@ const PAGE_TABS = [["patterns", "Patterns"], ["effects", "Effects"], ["music", "
 const REPEAT_CHIPS = [["today_only", "Today only"], ["every_day", "Every day"], ["weekdays", "Weekdays"], ["weekend", "Weekend"]];
 const SCHEDULE_PAUSE = "the controller takes about 15 seconds to confirm a schedule change";
 const SYNC_HINT_DELAY_MS = 500;
+// Schedules and the daily timer use this id for the combined effect.
+const COMBINED_ID = 200;
 const BUSY_TEXT = "The controller is busy with another app, probably the Trimlight app on a phone. It talks to one app at a time, so a change made here can take up to 30 seconds while Home Assistant waits for it to let go. Closing that app makes changes go through straight away.";
 const BUSY_HINT_DELAY_MS = 6000;
 const SLOW_CHANGE_MS = 1500;
@@ -527,6 +529,9 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const modeLabel = (key) => (key ? key.charAt(0).toUpperCase() + key.slice(1).replaceAll("_", " ") : "Pattern");
 const percent = (value) => `${Math.round((value / 255) * 100)}%`;
 const shortDay = ([month, day]) => `${MONTHS[month - 1] || "?"} ${day}`;
+const clockTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const HOLD_LABELS = { 30: "30 minutes", 60: "1 hour", 120: "2 hours", 240: "4 hours" };
+const holdLabel = (minutes) => (minutes ? HOLD_LABELS[minutes] || `${minutes} minutes` : "Until changed");
 const sunLabel = (sun) => `${sun.event === "sunset" ? "Sunset" : "Sunrise"}${sun.offset ? ` ${sun.offset < 0 ? "−" : "+"} ${Math.abs(sun.offset)} min` : ""}`;
 
 function shiftClock(clock, minutes) {
@@ -756,6 +761,13 @@ const PAGE_STYLE = `
   .now b { font-size: 16px; font-weight: 500; }
   .now small { display: block; color: var(--muted); font-size: 13px; }
   .busy-note { display: block; margin-top: 4px; font-size: 12px; color: var(--warn); }
+  .now-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+  .rail .item { position: relative; }
+  .editor-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+  .editor-head h2 { margin: 0; }
+  .rail .item > button:first-child { width: 100%; padding-right: 40px; }
+  .rail .play { position: absolute; top: 6px; right: 4px; display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border-radius: 50%; color: var(--accent); }
+  .rail .play svg { width: 18px; height: 18px; }
   .modes { display: inline-flex; background: var(--surface-2); border-radius: 999px; padding: 3px; gap: 2px; }
   .modes button { display: flex; align-items: center; gap: 6px; border: 0; background: none; padding: 6px 12px; border-radius: 999px; color: var(--muted); font-weight: 500; }
   .modes button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
@@ -953,7 +965,7 @@ class TrimlightPanel extends HTMLElement {
     super();
     const today = new Date();
     this._s = {
-      tab: "patterns", source: null, draft: null, selected: 0, live: false,
+      tab: "patterns", source: null, draft: null, selected: 0, trying: false,
       fxQuery: "", fxMotion: "All", fxColour: "All", fx: null, fxSpeed: 100, fxLength: 30, fxReverse: false, fxBright: 255, fxName: "",
       music: null, musicColour: "#ff0000", musicLength: 70, musicSens: 13,
       view: "year", month: new Date(today.getFullYear(), today.getMonth(), 1), drawer: null,
@@ -1007,6 +1019,7 @@ class TrimlightPanel extends HTMLElement {
   disconnectedCallback() {
     this._animate = false;
     this._ledTimer();
+    if (this._s.trying) this._setTrying(false);
   }
 
   _setup() {
@@ -1064,7 +1077,10 @@ class TrimlightPanel extends HTMLElement {
         Object.assign(s, { fxSpeed: data.current.speed, fxLength: data.current.length || 30, fxReverse: data.current.reverse, fxBright: data.current.brightness });
       }
     }
-    if (!s.draft || (typeof s.source === "number" && !this._effect(s.source))) this._openPattern(data.current && data.current.kind === "pattern" ? "current" : "new");
+    if (!s.draft || (typeof s.source === "number" && !this._effect(s.source))) {
+      const onRoof = this._savedMatch(data.current);
+      this._openPattern(onRoof ? onRoof.id : "new");
+    }
     if (!s.daily || !s.daily.some((d) => d.dirty)) s.daily = data.daily.map((d) => this._dailyDraft(d));
     if (!s.combined || !s.combined.dirty) s.combined = this._combinedDraft();
     if (!s.ports || !s.ports.dirty) s.ports = this._portsDraft(data.device);
@@ -1130,25 +1146,45 @@ class TrimlightPanel extends HTMLElement {
     return this._modeShown || state;
   }
 
+  _litState() {
+    const light = this._hass.states[this._data.entities.light];
+    const state = light ? light.state === "on" : !!(this._data.control && this._data.control.lit);
+    if (this._litShown === state) this._litShown = null;
+    return this._litShown === null || this._litShown === undefined ? state : this._litShown;
+  }
+
+  _heldByYou() {
+    const minutes = this._data.control.hold_minutes;
+    return { by: "you", until: minutes ? new Date(Date.now() + minutes * 60000).toISOString() : null, window: null };
+  }
+
+  _controlText() {
+    const c = this._data.control || {};
+    if (c.trying) return "Trying a pattern · the lights go back when you stop";
+    if (c.by === "schedule") return c.window ? `By schedule until ${clockTime(c.window.end)}` : `By schedule · ${this._nextSchedule()}`;
+    const who = c.by === "app" ? "Set in the Trimlight app" : "Set by you";
+    return c.until ? `${who} · back to schedule at ${clockTime(c.until)}` : `${who} · stays until you change it`;
+  }
+
   _renderNow() {
     const data = this._data;
     const light = this._hass.states[data.entities.light];
+    const c = data.control || {};
     const current = data.current || {};
-    const mode = this._modeState();
-    const name = (light && light.attributes.effect) || (current.kind === "music" ? current.effect : current.kind === "color" ? "Solid colour" : current.kind === "builtin" ? current.effect : current.kind === "pattern" ? "Unsaved pattern" : "");
-    let detail;
-    if (mode === "off") detail = "Off";
-    else if (mode === "timer") detail = `Timer · ${this._nextSchedule()}`;
-    else if (current.kind === "music") detail = "Manual · music, from the controller's audio input";
-    else if (current.kind === "builtin") detail = `Manual · built-in effect · brightness ${percent(current.brightness)}`;
-    else if (current.kind === "pattern") detail = `Manual · ${modeLabel(current.mode)} · brightness ${percent(current.brightness)}`;
-    else detail = "Manual";
+    const lit = this._litState();
+    if (light && light.attributes.effect === this._showingName) this._showingName = null;
+    const name = this._showingName || (c.window && c.window.effect) || (light && light.attributes.effect)
+      || (current.kind === "music" ? current.effect : current.kind === "color" ? "Solid colour" : current.kind === "builtin" ? current.effect : current.kind === "pattern" ? "Unsaved pattern" : "");
     const busy = light && light.attributes.controller_busy;
-    const modes = [["off", "power", "Off"], ["manual", "bulb", "Manual"], ["timer", "clock", "Timer"]];
-    this._nowEl.innerHTML = `<div class="what"><b>${esc(mode === "off" ? "Lights off" : name || "Lights on")}</b><small>${esc(detail)}</small>
+    const held = c.by !== "schedule" && !c.trying;
+    this._nowEl.innerHTML = `<div class="what"><b>${esc(lit ? name || "Lights on" : "Lights off")}</b><small>${esc(this._controlText())}</small>
         ${busy ? `<span class="busy-note" role="status">${esc(BUSY_TEXT)}</span>` : ""}</div>
-      <div class="modes" role="group" aria-label="Mode">${modes.map(([key, ic, label]) => `<button type="button" data-act="mode" data-key="${key}" aria-pressed="${mode === key}">${icon(ic)}${label}</button>`).join("")}</div>`;
-    this._tag.textContent = ["patterns", "effects", "music"].includes(this._s.tab) ? "Preview · approximate" : mode === "off" ? "Lights off" : "On the lights now · approximate";
+      <div class="now-actions">
+        <button class="btn ${lit ? "" : "primary"}" type="button" data-act="power">${icon("power")}${lit ? "Turn off" : "Turn on"}</button>
+        ${held && c.until ? `<button class="btn" type="button" data-act="keep">Keep</button>` : ""}
+        ${held ? `<button class="btn tonal" type="button" data-act="resume">${icon("clock")}Back to schedule</button>` : ""}
+      </div>`;
+    this._tag.textContent = c.trying ? "Trying on the lights · approximate" : lit ? "On the roof now · approximate" : "Lights off";
   }
 
   _nextSchedule() {
@@ -1171,22 +1207,24 @@ class TrimlightPanel extends HTMLElement {
   _previewLook() {
     const s = this._s;
     const data = this._data;
+    const c = data.control || {};
     const current = data.current || {};
     const fromBuiltin = (name, speed, brightness) => {
       const d = describeBuiltin(name);
-      const colors = d.gap ? d.colours.flatMap((c) => [c, null]) : d.colours;
+      const colors = d.gap ? d.colours.flatMap((x) => [x, null]) : d.colours;
       return { colors, dots: colors.map(() => 4), motion: motionOf(name), speed, brightness };
     };
-    if (s.tab === "patterns" && s.draft) {
-      return { colors: s.draft.colors.map((c) => c.color), dots: s.draft.colors.map((c) => c.dots), motion: motionOf(s.draft.mode), speed: s.draft.speed, brightness: s.draft.brightness };
+    const ofEffect = (effect) => (effect.kind === "pattern"
+      ? { colors: effect.colors.map((x) => x.color), dots: effect.colors.map((x) => x.dots), motion: motionOf(effect.mode), speed: effect.speed, brightness: effect.brightness }
+      : fromBuiltin(effect.effect, effect.speed, effect.brightness));
+    if (s.trying && s.draft) {
+      return { colors: s.draft.colors.map((x) => x.color), dots: s.draft.colors.map((x) => x.dots), motion: motionOf(s.draft.mode), speed: s.draft.speed, brightness: s.draft.brightness };
     }
-    if (s.tab === "effects" && s.fx !== null && s.fx >= 0) return fromBuiltin(data.builtins[s.fx], s.fxSpeed, s.fxBright);
-    if (s.tab === "music" && s.music !== null && s.music >= 0) {
-      const single = data.music.effects[s.music].startsWith("Single");
-      return { colors: single ? [s.musicColour] : RAINBOW, dots: single ? [1] : RAINBOW.map(() => 3), motion: "music", speed: 160, brightness: 255 };
-    }
-    if (this._modeState() === "off") return { off: true, colors: [], dots: [], motion: "static", speed: 0, brightness: 0 };
-    if (current.kind === "pattern") return { colors: current.colors.map((c) => c.color), dots: current.colors.map((c) => c.dots), motion: motionOf(current.mode), speed: current.speed, brightness: current.brightness };
+    if (!this._litState()) return { off: true, colors: [], dots: [], motion: "static", speed: 0, brightness: 0 };
+    const shown = (this._showingName && this._effectByName(this._showingName))
+      || (c.window && this._effect(c.window.effect_id === COMBINED_ID && data.combined ? (this._effectByName(data.combined.effects[0]) || {}).id : c.window.effect_id));
+    if (shown) return ofEffect(shown);
+    if (current.kind === "pattern") return { colors: current.colors.map((x) => x.color), dots: current.colors.map((x) => x.dots), motion: motionOf(current.mode), speed: current.speed, brightness: current.brightness };
     if (current.kind === "builtin") return fromBuiltin(current.effect, current.speed, current.brightness);
     if (current.kind === "music") return { colors: RAINBOW, dots: RAINBOW.map(() => 3), motion: "music", speed: 160, brightness: 255 };
     const light = this._hass.states[data.entities.light];
@@ -1233,12 +1271,15 @@ class TrimlightPanel extends HTMLElement {
     return `<div class="patterns">
       <div class="rail" aria-label="Saved patterns">
         <button type="button" data-act="open" data-key="new" aria-current="${s.source === "new"}"><span class="new">${icon("plus")} New pattern</span></button>
-        ${data.current && data.current.kind === "pattern" ? `<button type="button" data-act="open" data-key="current" aria-current="${s.source === "current"}"><span>What the lights show now</span>${bar(data.current.colors)}</button>` : ""}
-        ${saved.map((e) => `<button type="button" data-act="open" data-key="${e.id}" aria-current="${s.source === e.id}"><span>${esc(e.name)}</span>${bar(e.colors)}<span class="meta">${esc(modeLabel(e.mode))}${e.overlay ? ` · ${e.overlay === "snow" ? "Snow" : "Lightning"}` : ""}</span></button>`).join("")}
+        ${data.current && data.current.kind === "pattern" && !this._savedMatch(data.current) ? `<button type="button" data-act="open" data-key="current" aria-current="${s.source === "current"}"><span>Unsaved pattern on the roof</span>${bar(data.current.colors)}<span class="meta">Save it to keep it</span></button>` : ""}
+        ${saved.map((e) => `<div class="item"><button type="button" data-act="open" data-key="${e.id}" aria-current="${s.source === e.id}"><span>${esc(e.name)}</span>${bar(e.colors)}<span class="meta">${esc(modeLabel(e.mode))}${e.overlay ? ` · ${e.overlay === "snow" ? "Snow" : "Lightning"}` : ""}</span></button>
+          <button type="button" class="play" data-act="show-saved" data-key="${e.id}" title="Show on the lights" aria-label="Show ${esc(e.name)} on the lights">${icon("play")}</button></div>`).join("")}
       </div>
       <div class="editor">
+        <div class="editor-head"><h2>${esc(editing ? editing.name : s.source === "current" ? "Unsaved pattern on the roof" : "New pattern")}</h2>
+          <span class="note">${editing ? "Saved on the controller." : s.source === "current" ? "Copied from the lights. Give it a name and save it to keep it." : "Pick its colours, then give it a name and save it."}</span></div>
         <div class="card two">
-          <label class="field"><span class="label">Name</span><input class="input" data-in="name" maxlength="${data.limits.name}" value="${esc(d.name)}" placeholder="Name to save it under"></label>
+          <label class="field"><span class="label">Name</span><input class="input" data-in="name" maxlength="${data.limits.name}" value="${esc(d.name)}" placeholder="e.g. Fourth of July"></label>
           <label class="field"><span class="label">Mode</span><select class="select" data-in="mode">${data.modes.map((m) => `<option value="${m.key}" ${m.key === d.mode ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</select></label>
         </div>
         <div class="card">
@@ -1266,15 +1307,21 @@ class TrimlightPanel extends HTMLElement {
           ${editing && editing.used_by.length ? `<p class="note">Used by ${esc(editing.used_by.join(", "))}, so it can't be deleted.</p>` : ""}
         </div>
         <div class="actions">
-          <button class="btn tonal" type="button" data-act="show-pattern">${icon("play")}Show on lights</button>
-          <label class="chip"><input type="checkbox" data-in="live" ${s.live ? "checked" : ""}> Live preview</label>
+          <label class="chip"><input type="checkbox" data-in="try" ${s.trying ? "checked" : ""}> Try on the lights</label>
           <span class="grow"></span>
           ${editing ? `<button class="btn ghost danger" type="button" data-act="delete-pattern" ${editing.used_by.length ? "disabled" : ""}>${icon("trash")}Delete</button>
             <button class="btn" type="button" data-act="rename-pattern" ${!name || name === editing.stored_name ? "disabled" : ""}>${icon("pencil")}Rename</button>` : ""}
           <button class="btn primary" type="button" data-act="save-pattern" ${name ? "" : "disabled"}>${icon("save")}${saveLabel}</button>
         </div>
+        ${s.trying ? '<p class="note">Changes show on the lights as you make them. When you stop trying, save, or leave this tab, the lights go back to what they were showing.</p>' : ""}
       </div>
     </div>`;
+  }
+
+  _savedMatch(look) {
+    if (!look || look.kind !== "pattern") return null;
+    const key = (x) => JSON.stringify([x.mode, x.colors.map((c) => [c.color, c.dots])]);
+    return this._data.effects.find((e) => e.kind === "pattern" && key(e) === key(look)) || null;
   }
 
   _patternData() {
@@ -1321,7 +1368,6 @@ class TrimlightPanel extends HTMLElement {
           <div class="slider"><span class="label">Length</span><input type="range" min="1" max="90" value="${s.fxLength}" data-in="fx-length"><output>${s.fxLength}</output></div>
           <div class="slider"><span class="label">Brightness</span><input type="range" min="0" max="255" value="${s.fxBright}" data-in="fx-bright"><output>${percent(s.fxBright)}</output></div>
           <div class="row"><span class="label" style="width:92px">Direction</span><div class="seg"><button type="button" data-act="reverse" data-key="0" aria-pressed="${!s.fxReverse}">Forward</button><button type="button" data-act="reverse" data-key="1" aria-pressed="${s.fxReverse}">Reverse</button></div></div>
-          <div class="actions"><button class="btn tonal" type="button" data-act="show-effect">${icon("play")}Show on lights</button></div>
           <div class="field"><span class="label">Save to the controller's library</span>
             <div class="row"><input class="input" style="flex:1" data-in="fx-name" maxlength="${data.limits.name}" value="${esc(s.fxName || sel.name.slice(0, data.limits.name))}"><button class="btn primary" type="button" data-act="save-effect">${icon("save")}Save</button></div>
             <p class="note">Saved effects can be scheduled and used in the combined effect.</p></div>` : '<p class="note">Pick an effect to see its settings.</p>'}
@@ -1382,8 +1428,10 @@ class TrimlightPanel extends HTMLElement {
     const stuck = [...data.calendar, ...waiting].filter((x) => x.holiday && x.holiday.problem)
       .map((x) => `<div class="warn-box"><b>${typeof x.id === "number" ? `Schedule ${x.id} didn't move.` : `The waiting ${esc(this._holidayName(x.holiday.key))} schedule is stuck.`}</b><span>${esc(x.holiday.problem)}</span><button class="btn tonal" type="button" data-act="edit" data-key="${x.id}">Open it</button></div>`).join("");
     const waitingRow = (w) => `<button type="button" class="waiting" data-act="edit" data-key="${w.id}"><i style="background:${this._colourOf(w.effect)}"></i><span>${esc(w.effect || "Unknown effect")}<small>${esc(this._waitingText(w))}</small></span><span class="t">${icon("clock")}</span></button>`;
-    let head = `${sunWarning}${stuck}<div class="warn-box">${icon("clock")}<span><b>Mode is ${mode === "timer" ? "Timer" : mode === "off" ? "Off" : "Manual"}.</b> ${mode === "timer" ? "Schedules are running." : "Schedules only run in Timer mode."}</span>
-        ${mode === "timer" ? "" : '<button class="btn tonal" type="button" data-act="mode" data-key="timer">Switch to Timer</button>'}</div>
+    const c = data.control || {};
+    const paused = c.by === "schedule" ? "" : `<div class="warn-box">${icon("clock")}<span><b>Schedules are paused</b> while ${c.by === "app" ? "a change made in the Trimlight app" : "your change"} is showing. ${c.until ? `They take over again at ${clockTime(c.until)}.` : "It stays until you change it."}</span>
+        <button class="btn tonal" type="button" data-act="resume">Back to schedule</button></div>`;
+    let head = `${sunWarning}${stuck}${paused}
       <div class="sch-top"><div class="seg" role="group" aria-label="View">${[["year", "Year"], ["month", "Month"], ["list", "List"]].map(([k, l]) => `<button type="button" data-act="view" data-key="${k}" aria-pressed="${s.view === k}">${l}</button>`).join("")}</div>
         ${s.view === "month" ? `<button class="btn ghost" type="button" data-act="step" data-step="-1" aria-label="Previous month">${icon("left")}</button><b>${MONTH_NAMES[s.month.getMonth()]} ${s.month.getFullYear()}</b><button class="btn ghost" type="button" data-act="step" data-step="1" aria-label="Next month">${icon("right")}</button>` : s.view === "year" ? `<b>Every year</b>` : ""}
         <span class="grow"></span><button class="btn primary" type="button" data-act="new-schedule" ${data.entities.calendar ? "" : "disabled"}>${icon("plus")}Add schedule</button></div>`;
@@ -1644,6 +1692,8 @@ class TrimlightPanel extends HTMLElement {
             <div class="row"><input class="input" style="flex:1" data-in="ctl-name" maxlength="25" value="${esc(name)}" aria-label="Controller name"><button class="btn" type="button" data-act="rename-controller" ${this._nameChanged() ? "" : "disabled"}>${icon("pencil")}Rename</button></div>
             <p class="note">The name the phone app shows: up to 25 letters, digits, spaces, - and _.</p></div>
           <dl class="facts">${fact("Address", device.host)}${fact("Firmware", device.firmware)}${fact("MCU firmware", device.mcu_version)}${fact("Controller clock", device.clock ? device.clock.replace("T", " ") : null)}${fact("Clock sync", device.time_sync === "auto" ? "Automatic: Home Assistant sets it on every update" : device.time_sync === "manual" ? "Manual" : null)}</dl></div>
+        <div class="card"><h2>Changes you make</h2><p class="sub">Timer is the controller's normal mode: its schedules run the lights. A change made here, in Home Assistant or in the Trimlight app lasts this long, or until a schedule next switches the lights on or off if that's sooner. Then the controller goes back to Timer.</p>
+          <div class="seg" role="group" aria-label="Changes last">${(this._data.control.hold_choices || []).map((m) => `<button type="button" data-act="hold" data-key="${m ?? "keep"}" aria-pressed="${this._data.control.hold_minutes === m}">${holdLabel(m)}</button>`).join("")}</div></div>
         <div class="card"><h2>Roofline picture</h2><p class="sub">The house the preview at the top lights up.</p>
           <div class="seg" role="group" aria-label="Roofline picture">${Object.entries(ROOFLINES).map(([key, shape]) => `<button type="button" data-act="roofline" data-key="${key}" aria-pressed="${this._data.roofline === key}">${esc(shape.name)}</button>`).join("")}</div></div>
       </div>`;
@@ -1728,7 +1778,46 @@ class TrimlightPanel extends HTMLElement {
     if (act === "favourite") ev.stopPropagation();
     switch (act) {
       case "menu": this.dispatchEvent(new Event("hass-toggle-menu", { bubbles: true, composed: true })); return;
-      case "tab": s.tab = key; s.drawer = null; break;
+      case "tab": if (s.trying && key !== "patterns") this._setTrying(false); s.tab = key; s.drawer = null; break;
+      case "power": {
+        const lit = this._litState();
+        const c = data.control;
+        const before = { ...c };
+        this._call("light", lit ? "turn_off" : "turn_on", {}, { entity_id: data.entities.light }, null, {
+          apply: () => { this._litShown = !lit; Object.assign(c, this._heldByYou()); },
+          undo: () => { this._litShown = null; Object.assign(c, before); },
+        });
+        return;
+      }
+      case "resume": {
+        const c = data.control;
+        const before = { ...c };
+        this._call(DOMAIN, "resume_schedule", {}, null, null, { apply: () => { Object.assign(c, { by: "schedule", until: null }); this._litShown = null; }, undo: () => Object.assign(c, before) });
+        return;
+      }
+      case "keep": {
+        const c = data.control;
+        const before = c.until;
+        this._call(DOMAIN, "keep_change", {}, null, null, { apply: () => { c.until = null; }, undo: () => { c.until = before; } });
+        return;
+      }
+      case "hold": {
+        const c = data.control;
+        const before = c.hold_minutes;
+        const minutes = key === "keep" ? null : Number(key);
+        this._ws("hold_minutes", { minutes }, null, { apply: () => { c.hold_minutes = minutes; }, undo: () => { c.hold_minutes = before; } });
+        return;
+      }
+      case "show-saved": {
+        const effect = this._effect(Number(key));
+        const c = data.control;
+        const before = { ...c };
+        this._call(DOMAIN, "show_saved_effect", { effect_id: effect.id }, null, null, {
+          apply: () => { this._litShown = true; this._showingName = effect.name; Object.assign(c, this._heldByYou()); },
+          undo: () => { this._litShown = null; this._showingName = null; Object.assign(c, before); },
+        });
+        return;
+      }
       case "mode":
         this._call("select", "select_option", { option: key }, { entity_id: data.entities.mode }, null, {
           apply: () => { this._modeShown = key; },
@@ -1911,7 +2000,7 @@ class TrimlightPanel extends HTMLElement {
     const s = this._s;
     switch (field) {
       case "mode": s.draft.mode = t.value; this._livePreview(); return;
-      case "live": s.live = t.checked; this._livePreview(); return;
+      case "try": this._setTrying(t.checked); return;
       case "fx-colour": s.fxColour = t.value; break;
       case "fx-speed": case "fx-length": case "fx-bright": this._call(DOMAIN, "show_effect", this._effectData(), null, `Showing ${this._data.builtins[s.fx]}.`, { reload: false }); return;
       case "music-colour": s.musicColour = t.value; break;
@@ -1984,8 +2073,23 @@ class TrimlightPanel extends HTMLElement {
     }, 1000);
   }
 
+  _setTrying(on) {
+    const s = this._s;
+    if (s.trying === on) return;
+    s.trying = on;
+    clearTimeout(this._liveTimer);
+    const c = this._data && this._data.control;
+    this._ws("try", { on }, null, {
+      quiet: true,
+      reload: !on,
+      apply: () => { if (c) c.trying = on; },
+      undo: () => { s.trying = !on; if (c) c.trying = !on; },
+    }).then((ok) => { if (ok && on && s.trying) this._livePreview(); });
+    if (this.shadowRoot) this._safeRender();
+  }
+
   _livePreview() {
-    if (!this._s.live) return;
+    if (!this._s.trying) return;
     clearTimeout(this._liveTimer);
     this._liveTimer = setTimeout(() => this._call(DOMAIN, "show_pattern", this._patternData(), null, "Live preview is on: changes show on the lights.", { reload: false, quiet: true }), LIVE_PREVIEW_DELAY_MS);
   }
@@ -2002,6 +2106,7 @@ class TrimlightPanel extends HTMLElement {
       after: () => {
         const saved = this._data.effects.find((e) => e.stored_name === name);
         if (saved) this._openPattern(saved.id);
+        if (s.trying) this._setTrying(false);
       },
     });
   }

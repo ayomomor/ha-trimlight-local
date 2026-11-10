@@ -10,14 +10,14 @@ Use the command-line tool first. Run it from any computer that can reach the con
 
 ```
 cd tools
-python trimlight_cli.py --host 192.168.10.66 status
-python trimlight_cli.py --host 192.168.10.66 off
-python trimlight_cli.py --host 192.168.10.66 on
-python trimlight_cli.py --host 192.168.10.66 effect "Rainbow Wave" --brightness 180
-python trimlight_cli.py --host 192.168.10.66 color 255 120 0
-python trimlight_cli.py --host 192.168.10.66 timer
+python trimlight_cli.py --host 192.168.1.50 status
+python trimlight_cli.py --host 192.168.1.50 off
+python trimlight_cli.py --host 192.168.1.50 on
+python trimlight_cli.py --host 192.168.1.50 effect "Rainbow Wave" --brightness 180
+python trimlight_cli.py --host 192.168.1.50 color 255 120 0
+python trimlight_cli.py --host 192.168.1.50 timer
 python trimlight_cli.py effects
-python trimlight_cli.py discover --broadcast 192.168.10.255
+python trimlight_cli.py discover --broadcast 192.168.1.255
 ```
 
 `discover` only works from the controller's own subnet, because it uses broadcast.
@@ -39,9 +39,9 @@ Or by hand: copy `custom_components/trimlight_local` into your Home Assistant `c
 Then:
 
 1. Go to **Settings → Devices & services → Add integration → Trimlight Edge (Local)**.
-2. Enter the controller's IP address, for example `192.168.10.66`. Controllers on the same subnet as Home Assistant are filled in automatically.
+2. Enter the controller's IP address on your home network, such as `192.168.1.50`. The form lists the controllers it found on Home Assistant's network, with their addresses; your router's list of connected devices shows it too.
 
-The Home Assistant machine must be able to reach the controller on **TCP 8586**. Give the controller a fixed IP address (a DHCP reservation in your router).
+The Home Assistant machine must be able to reach the controller on **TCP 8586**. Give the controller a fixed IP address (a DHCP reservation in your router). If its address changes anyway, Home Assistant finds it again by its device code, switches to the new address and tells you in a notification.
 
 Tested with Home Assistant 2026.10 and 2026.11.
 
@@ -49,7 +49,7 @@ Tested with Home Assistant 2026.10 and 2026.11.
 
 - **A Trimlight page in the sidebar**, installed with the integration. See below.
 - **Light**
-  - on/off
+  - on/off: on means the lights are lit, in Manual mode or while a schedule runs in Timer mode
   - brightness
   - RGB colour
   - your saved effects, by name (read from the controller's library)
@@ -58,6 +58,7 @@ Tested with Home Assistant 2026.10 and 2026.11.
   - Off
   - Manual: whatever was last shown
   - Timer: the schedules stored on the controller
+  - Choosing Off or Manual here is a change like any other; see [Timer is the normal mode](#timer-is-the-normal-mode).
 - **Effect speed** (0–255) and **Effect length** (1–90 dots) sliders, and a **Reverse direction** switch.
   - They show the settings of the effect on the lights, including one started from the phone app.
   - Changing one updates the effect on the lights straight away.
@@ -93,7 +94,7 @@ Example: a red, white and blue chase.
 ```yaml
 action: trimlight_local.show_pattern
 target:
-  entity_id: light.trimlight_192_168_10_66
+  entity_id: light.roofline
 data:
   mode: chase_forward
   colors: [red, white, "#0000ff"]
@@ -111,7 +112,7 @@ Example: save that pattern, then show it every night from Dec 1 to Dec 27, 16:30
 ```yaml
 action: trimlight_local.save_effect
 target:
-  entity_id: light.trimlight_192_168_10_66
+  entity_id: light.roofline
 data:
   name: Porch flag
   mode: chase_forward
@@ -119,7 +120,7 @@ data:
 ---
 action: trimlight_local.set_schedule
 target:
-  entity_id: calendar.trimlight_192_168_10_66_schedules
+  entity_id: calendar.roofline_schedules
 data:
   effect: Porch flag
   start_date: "2026-12-01"
@@ -130,6 +131,23 @@ data:
 ```
 
 Schedules can show saved effects and the combined effect, but not built-in effects directly; save a built-in effect first with `save_effect` while it is showing. The year in the dates is ignored: schedules repeat every year.
+
+### Timer is the normal mode
+
+Timer is the controller's normal mode: its schedules switch the lights on and off. A change made by hand is a short override, the way a thermostat holds a temperature:
+
+- **What counts**: picking an effect, a colour, a pattern or music, or turning the lights on or off, whether from the Trimlight page, Home Assistant, an automation or the Trimlight app.
+- **How long**: 1 hour, or until a schedule next switches the lights on or off if that comes sooner. Then the controller goes back to Timer. With nothing scheduled until Thanksgiving, an effect turned on at 7 pm goes off at 8 pm.
+- **Settings → Changes you make** sets the length: 30 minutes, 1, 2 or 4 hours, or until changed.
+- **On the page**: who is in charge (the schedule, you or the Trimlight app) and until when, with **Keep** to make the change last until something else is changed, and **Back to schedule**.
+- **In automations**: the services `trimlight_local.keep_change` and `trimlight_local.resume_schedule`, and the light's attributes `controlled_by` (`schedule`, `you` or `app`) and `back_to_schedule_at`.
+- **Run by automations instead**: set the length to **Until changed**, and Home Assistant never switches the controller back to Timer by itself.
+
+```yaml
+action: trimlight_local.keep_change
+target:
+  entity_id: light.roofline
+```
 
 ### Sunrise and sunset times
 
@@ -155,7 +173,7 @@ A schedule can follow a holiday whose date changes every year, instead of fixed 
 ```yaml
 action: trimlight_local.set_schedule
 target:
-  entity_id: calendar.trimlight_192_168_10_66_schedules
+  entity_id: calendar.roofline_schedules
 data:
   effect: Simple
   holiday: thanksgiving
@@ -193,12 +211,12 @@ The controller only stores a month and day, and repeats them every year. So Home
 - **The calendar** shows each year's own nights, without the years a schedule skips.
 - **If you change its dates in the phone app**, stops moving it, as with sun times.
 
-Example automation action. A controller added by IP address is named "Trimlight 192.168.10.66", which gives this entity ID:
+Example automation action. The examples here use a controller named Roofline; entity IDs follow your controller's name, so change `roofline` to match yours:
 
 ```yaml
 action: light.turn_on
 target:
-  entity_id: light.trimlight_192_168_10_66
+  entity_id: light.roofline
 data:
   effect: Red Green White Snake
   brightness: 200
@@ -209,14 +227,15 @@ data:
 The integration adds **Trimlight** to the sidebar, a local stand-in for the phone app. There is nothing else to install. It uses Home Assistant's theme, light or dark.
 
 - **At the top**:
-  - a night-time roofline that previews what you are editing, or shows what the lights are doing. The preview is approximate: the controller's own animation isn't known in detail.
-  - a **Now** strip: the current effect, or the next schedule when Mode is Timer.
-  - **Mode** buttons: Off, Manual, Timer.
+  - a night-time roofline showing what is on the roof now, dark when the lights are off. It is approximate: the controller's own animation isn't known in detail.
+  - what is showing, who is in charge (the schedule, you or the Trimlight app) and until when.
+  - **Turn on** or **Turn off**, and while a change is in charge, **Keep** and **Back to schedule**.
 - **Patterns**: create, edit, preview and save patterns.
-  - Saved patterns are listed down the side.
+  - Saved patterns are listed down the side, each with a play button that shows it on the lights. The one on the roof opens first; a pattern on the roof that isn't saved is listed as "Unsaved pattern on the roof".
   - Colours are tiles, with dot counts, a palette, any custom colour, and "no colour" for unlit dots.
-  - Also here: speed, brightness, lightning or snow, Show on lights, Live preview, Save or Save as new, Rename and Delete.
-  - Lightning and snow belong to a saved effect, so they only show when the controller plays that effect from its memory. Turning one on plays the effect, and Show on lights does the same for a saved pattern you haven't changed. A changed pattern is sent as a preview, which shows without its lightning or snow.
+  - Also here: speed, brightness, lightning or snow, Save or Save as new, Rename and Delete.
+  - **Try on the lights** shows each change on the lights as you make it. When you switch it off, save, or leave the tab, the lights go back to what they were showing, schedule included.
+  - Lightning and snow belong to a saved effect, so they only show when the controller plays that effect from its memory. Turning one on plays the effect, and so does the play button. A pattern being tried is sent as a preview, which shows without its lightning or snow.
 - **Effects**: all 180 built-in effects.
   - Search, filter by motion (snake, wave, comet…) or colour, and star favourites; favourites are kept in Home Assistant.
   - Tapping one shows it on the lights. Speed, length, brightness and direction sit beside it, and **Save** puts it in the controller's library so schedules can use it.
@@ -257,7 +276,7 @@ Or add a manual card:
 
 ```yaml
 type: custom:trimlight-pattern-card
-entity: light.trimlight_192_168_10_66
+entity: light.roofline
 ```
 
 In the card:

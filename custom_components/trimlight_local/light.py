@@ -43,7 +43,9 @@ from .const import (
     PATTERN_MODES,
     REPEATS,
     SERVICE_DELETE_SAVED_EFFECT,
+    SERVICE_KEEP_CHANGE,
     SERVICE_RENAME_SAVED_EFFECT,
+    SERVICE_RESUME_SCHEDULE,
     SERVICE_SAVE_EFFECT,
     SERVICE_SET_COMBINED_EFFECT,
     SERVICE_SET_DAILY_SCHEDULE,
@@ -166,6 +168,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: TrimlightConfigEntry, as
         },
         "async_start_music",
     )
+    platform.async_register_entity_service(SERVICE_RESUME_SCHEDULE, None, "async_resume_schedule")
+    platform.async_register_entity_service(SERVICE_KEEP_CHANGE, None, "async_keep_change")
 
 
 class TrimlightLight(TrimlightEntity, LightEntity, RestoreEntity):
@@ -200,6 +204,13 @@ class TrimlightLight(TrimlightEntity, LightEntity, RestoreEntity):
         self._adopt_current_effect()
         super()._handle_coordinator_update()
 
+    @property
+    def effect(self) -> str | None:
+        if (window := self.coordinator.lit_by_schedule) is not None:
+            name = self.coordinator.saved_effect_name(window.effect_id)
+            return name if name in self.effect_list else None
+        return self._attr_effect
+
     def _adopt_current_effect(self) -> None:
         """Follow changes made outside Home Assistant (the app, schedules); what Home Assistant sent itself reads back the same."""
         data = self.coordinator.data
@@ -233,8 +244,7 @@ class TrimlightLight(TrimlightEntity, LightEntity, RestoreEntity):
 
     @property
     def is_on(self) -> bool | None:
-        data = self.coordinator.data
-        return None if data is None else data.is_on
+        return self.coordinator.lights_lit
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
@@ -245,6 +255,8 @@ class TrimlightLight(TrimlightEntity, LightEntity, RestoreEntity):
             "mode": SwitchState(state).name.lower() if state in SwitchState._value2member_map_ else state,
             "verified": coordinator.client.verified,
             "controller_busy": coordinator.busy,
+            "controlled_by": coordinator.controlled_by,
+            "back_to_schedule_at": None if (until := coordinator.back_to_schedule_at) is None else until.isoformat(),
         }
         if data is not None:
             attributes["overlays"] = {coordinator.saved_effect_name(o.effect_id) or str(o.effect_id): OverlayKind(o.kind).name.lower() if o.kind in OverlayKind._value2member_map_ else o.kind for o in data.overlays}
@@ -262,7 +274,8 @@ class TrimlightLight(TrimlightEntity, LightEntity, RestoreEntity):
         if effect is not None and effect not in self.effect_list:
             raise ServiceValidationError(f"Unknown effect {effect!r}")
         if not kwargs.keys() & {ATTR_BRIGHTNESS, ATTR_EFFECT, ATTR_RGB_COLOR}:
-            await self.coordinator.async_turn_on()
+            if not self.coordinator.lights_lit:
+                await self.coordinator.async_turn_on()
             return
         self._trust_next_poll()
         if ATTR_BRIGHTNESS in kwargs:
@@ -284,7 +297,15 @@ class TrimlightLight(TrimlightEntity, LightEntity, RestoreEntity):
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
+        if self.coordinator.lights_lit is False:
+            return
         await self.coordinator.async_set_switch_state(SwitchState.OFF)
+
+    async def async_resume_schedule(self) -> None:
+        await self.coordinator.async_resume_schedule()
+
+    async def async_keep_change(self) -> None:
+        await self.coordinator.async_keep_change()
 
     async def async_show_saved_effect(self, effect_id: int) -> None:
         self._trust_next_poll()

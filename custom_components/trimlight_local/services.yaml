@@ -389,3 +389,15 @@ start_music:
         number:
           min: 1
           max: 16
+
+resume_schedule:
+  target:
+    entity:
+      integration: trimlight_local
+      domain: light
+
+keep_change:
+  target:
+    entity:
+      integration: trimlight_local
+      domain: light

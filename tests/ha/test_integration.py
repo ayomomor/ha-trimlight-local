@@ -1,10 +1,11 @@
 import asyncio
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from functools import partial
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+import pytest_socket
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.components.light import ATTR_BRIGHTNESS, ATTR_EFFECT, ATTR_RGB_COLOR, DOMAIN as LIGHT_DOMAIN
@@ -21,6 +22,7 @@ from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.trimlight_local.const import DOMAIN
+from custom_components.trimlight_local.control import Hold
 from custom_components.trimlight_local.effects import BUILTIN_EFFECTS
 from custom_components.trimlight_local.holiday_rules import HolidayDates, HolidayRule, HolidayRules
 from custom_components.trimlight_local.sun import SunRules, SunTime
@@ -59,7 +61,27 @@ async def test_config_flow_creates_entry(hass: HomeAssistant, controller) -> Non
             result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_HOST: "127.0.0.1"})
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["title"] == "Roofline"
-    assert result["data"] == {CONF_HOST: "127.0.0.1"}
+    assert result["data"] == {CONF_HOST: "127.0.0.1", "device_code": "TL-1"}
+
+
+async def test_config_flow_suggests_no_address(hass: HomeAssistant) -> None:
+    found = [DiscoveredDevice("127.0.0.1", "Roofline", "TL-1", 1, 0, None)]
+    with patch("custom_components.trimlight_local.config_flow.discover", return_value=found):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+    key = next(iter(result["data_schema"].schema))
+    assert key.default is vol.UNDEFINED and not (key.description or {}).get("suggested_value")
+    assert result["description_placeholders"]["found"] == "Roofline (127.0.0.1)"
+
+
+async def test_config_flow_moves_a_known_controller(hass: HomeAssistant, controller) -> None:
+    entry = MockConfigEntry(domain=DOMAIN, title="Roofline", unique_id="10.0.0.9", data={CONF_HOST: "10.0.0.9", "device_code": "TL-1"})
+    entry.add_to_hass(hass)
+    found = [DiscoveredDevice("127.0.0.1", "Roofline", "TL-1", 1, 0, None)]
+    with patch("custom_components.trimlight_local.config_flow.discover", return_value=found):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": config_entries.SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {CONF_HOST: "127.0.0.1"})
+    assert (result["type"], result["reason"]) == (FlowResultType.ABORT, "already_configured")
+    assert entry.data[CONF_HOST] == "127.0.0.1"
 
 
 async def test_config_flow_cannot_connect(hass: HomeAssistant) -> None:
@@ -855,7 +877,7 @@ async def test_show_effect_music_and_favourites(hass: HomeAssistant, controller,
     await ws.send_json({"id": 6, "type": f"{DOMAIN}/roofline", "entity_id": LIGHT, "roofline": "castle"})
     assert not (await ws.receive_json())["success"]
     stored = await entry.runtime_data._page_store.async_load()
-    assert stored == {"favourites": [3, 0], "roofline": "two_gables"}
+    assert (stored["favourites"], stored["roofline"], stored["hold_minutes"]) == ([3, 0], "two_gables", 60)
 
     with pytest.raises(INVALID):
         await call(hass, "show_effect", {ATTR_EFFECT: "Not an effect"})
@@ -927,3 +949,160 @@ async def test_setup_retries_when_unreachable(hass: HomeAssistant) -> None:
     entry.add_to_hass(hass)
     assert not await hass.config_entries.async_setup(entry.entry_id)
     assert entry.state is config_entries.ConfigEntryState.SETUP_RETRY
+
+
+NOW = "custom_components.trimlight_local.coordinator.now"
+
+
+async def wait_for(condition, seconds: float = 5.0) -> None:
+    for _ in range(int(seconds / 0.05)):
+        if condition():
+            return
+        await asyncio.sleep(0.05)
+    assert condition()
+
+
+async def refresh(hass: HomeAssistant, entry: MockConfigEntry) -> None:
+    with patch("custom_components.trimlight_local.trimlight.FRESH_SYNC_SECONDS", -1):
+        await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+
+
+async def test_light_is_on_only_while_lit(hass: HomeAssistant, controller) -> None:
+    use_fixture(controller, "sync_reply.hex")
+    controller.switch_state = 2
+    with patch(NOW, return_value=local(2026, 11, 25, 18, 0)):
+        entry = await setup_entry(hass)
+        state = hass.states.get(LIGHT)
+        assert (state.state, state.attributes["controlled_by"], state.attributes[ATTR_EFFECT]) == (STATE_ON, "schedule", "Simple")
+    with patch(NOW, return_value=local(2026, 11, 25, 12, 0)):
+        await refresh(hass, entry)
+        assert hass.states.get(LIGHT).state == STATE_OFF
+        await hass.services.async_call(LIGHT_DOMAIN, "turn_off", {ATTR_ENTITY_ID: LIGHT}, blocking=True)
+        await settle(hass)
+        assert controller.switch_state == 2
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_a_change_lasts_an_hour_then_the_schedules_take_over(hass: HomeAssistant, controller) -> None:
+    use_fixture(controller, "sync_reply.hex")
+    controller.switch_state = 2
+    moment = local(2026, 8, 12, 19, 0)
+    with patch(NOW, return_value=moment):
+        entry = await setup_entry(hass)
+        await hass.services.async_call(LIGHT_DOMAIN, "turn_on", {ATTR_ENTITY_ID: LIGHT, ATTR_EFFECT: "Rainbow Wave"}, blocking=True)
+        await settle(hass)
+    state = hass.states.get(LIGHT)
+    assert controller.switch_state == 1
+    assert (state.state, state.attributes["controlled_by"], state.attributes["back_to_schedule_at"]) == (STATE_ON, "you", (moment + timedelta(hours=1)).isoformat())
+
+    entry.runtime_data._set_hold(Hold("you", dt_util.now() + timedelta(seconds=0.2)))
+    await wait_for(lambda: controller.switch_state == 2)
+    await settle(hass)
+    state = hass.states.get(LIGHT)
+    assert (state.attributes["controlled_by"], state.attributes["back_to_schedule_at"]) == ("schedule", None)
+
+    with patch(NOW, return_value=local(2026, 11, 25, 15, 30)):
+        await hass.services.async_call(LIGHT_DOMAIN, "turn_on", {ATTR_ENTITY_ID: LIGHT, ATTR_EFFECT: "Rainbow Wave"}, blocking=True)
+        await settle(hass)
+    assert hass.states.get(LIGHT).attributes["back_to_schedule_at"] == local(2026, 11, 25, 16, 27).isoformat()
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_changes_made_in_the_app_are_held_too(hass: HomeAssistant, controller) -> None:
+    use_fixture(controller, "sync_reply.hex")
+    controller.switch_state = 2
+    moment = local(2026, 8, 12, 19, 0)
+    with patch(NOW, return_value=moment):
+        entry = await setup_entry(hass)
+        controller.switch_state = 1
+        await refresh(hass, entry)
+    state = hass.states.get(LIGHT)
+    assert (state.attributes["controlled_by"], state.attributes["back_to_schedule_at"]) == ("app", (moment + timedelta(hours=1)).isoformat())
+
+    await call(hass, "keep_change", {})
+    assert hass.states.get(LIGHT).attributes["back_to_schedule_at"] is None
+    with patch(NOW, return_value=moment + timedelta(hours=3)):
+        await refresh(hass, entry)
+    assert controller.switch_state == 1
+
+    await call(hass, "resume_schedule", {})
+    assert controller.switch_state == 2
+    assert hass.states.get(LIGHT).attributes["controlled_by"] == "schedule"
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_hold_length_and_trying_patterns(hass: HomeAssistant, controller, hass_ws_client) -> None:
+    use_fixture(controller, "sync_reply.hex")
+    controller.switch_state = 2
+    moment = local(2026, 8, 12, 19, 0)
+    with patch(NOW, return_value=moment):
+        entry = await setup_entry(hass)
+    coordinator = entry.runtime_data
+    ws = await hass_ws_client(hass)
+
+    async def send(msg_id: int, **msg) -> dict:
+        await ws.send_json({"id": msg_id, "entity_id": LIGHT, **msg})
+        return await ws.receive_json()
+
+    assert (await send(1, type="trimlight_local/hold_minutes", minutes=120))["success"]
+    assert not (await send(2, type="trimlight_local/hold_minutes", minutes=45))["success"]
+    page = (await send(3, type="trimlight_local/state"))["result"]
+    assert (page["control"]["hold_minutes"], page["control"]["hold_choices"], page["control"]["by"]) == (120, [30, 60, 120, 240, None], "schedule")
+    with patch(NOW, return_value=moment):
+        await hass.services.async_call(LIGHT_DOMAIN, "turn_on", {ATTR_ENTITY_ID: LIGHT, ATTR_EFFECT: "Rainbow Wave"}, blocking=True)
+        await settle(hass)
+    assert hass.states.get(LIGHT).attributes["back_to_schedule_at"] == (moment + timedelta(hours=2)).isoformat()
+    await call(hass, "resume_schedule", {})
+    assert controller.switch_state == 2
+
+    assert (await send(4, type="trimlight_local/try", on=True))["success"]
+    await call(hass, "show_pattern", {"mode": "static", "colors": ["red", "white"]})
+    state = hass.states.get(LIGHT)
+    assert controller.switch_state == 1 and coordinator.hold is None
+    assert (state.attributes["controlled_by"], state.attributes["back_to_schedule_at"]) == ("you", None)
+    assert (await send(5, type="trimlight_local/state"))["result"]["control"]["trying"] is True
+    assert (await send(6, type="trimlight_local/try", on=False))["success"]
+    await settle(hass)
+    assert controller.switch_state == 2 and coordinator.hold is None and coordinator.trial is None
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_controller_found_at_a_new_address(hass: HomeAssistant, controller) -> None:
+    # The old address must refuse the connection, as a controller that moved does, rather than be blocked by the test plugin.
+    pytest_socket.socket_allow_hosts(["127.0.0.1", "127.0.0.2"])
+    entry = MockConfigEntry(domain=DOMAIN, title="Porch", unique_id="127.0.0.2", data={CONF_HOST: "127.0.0.2", "device_code": "TL-1"})
+    entry.add_to_hass(hass)
+    found = [DiscoveredDevice("127.0.0.1", "Porch", "TL-1", 1, 0, None)]
+    with (
+        patch("custom_components.trimlight_local.coordinator.discover", return_value=found),
+        patch("custom_components.trimlight_local.coordinator.persistent_notification.async_create") as notify,
+    ):
+        assert await hass.config_entries.async_setup(entry.entry_id)
+        await hass.async_block_till_done()
+    assert entry.data[CONF_HOST] == "127.0.0.1"
+    assert hass.states.get(LIGHT).state in (STATE_ON, STATE_OFF)
+    assert notify.call_args.kwargs["title"] == "Trimlight controller moved"
+    assert "127.0.0.2" in notify.call_args.args[1] and "127.0.0.1" in notify.call_args.args[1]
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_device_code_is_learnt_for_later(hass: HomeAssistant, controller) -> None:
+    found = [DiscoveredDevice("127.0.0.1", "Porch", "TL-9", 1, 0, None)]
+    with patch("custom_components.trimlight_local.coordinator.discover", return_value=found):
+        entry = await setup_entry(hass)
+        await hass.async_block_till_done()
+    assert entry.data["device_code"] == "TL-9"
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()

@@ -8,15 +8,18 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
+from homeassistant.components import persistent_notification
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_HOST
 from homeassistant.core import CALLBACK_TYPE, HassJob, HomeAssistant, callback
-from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.event import async_call_later, async_track_point_in_utc_time
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .const import COMBINED_EFFECT_NAME, DEFAULT_PIXEL_LEN, DEFAULT_SPEED, DOMAIN, ROOFLINES, SCAN_INTERVAL
+from .const import COMBINED_EFFECT_NAME, CONF_DEVICE_CODE, DEFAULT_PIXEL_LEN, DEFAULT_SPEED, DOMAIN, ROOFLINES, SCAN_INTERVAL
+from .control import BY_APP, BY_SCHEDULE, BY_YOU, DEFAULT_HOLD_MINUTES, HOLD_CHOICES, Hold, Window, lit_window, next_change
 from .effects import BUILTIN_EFFECTS
 from .holiday_rules import HOLIDAYS, HolidayDates, HolidayRule, HolidayRules, WaitingSchedule, holiday_name, is_us_holiday
 from .sun import SunRule, SunRules, SunTime, TimeSetting, now, rule_for, window_times
@@ -44,6 +47,7 @@ from .trimlight import (
     ControllerBusy,
     TrimlightClient,
     TrimlightError,
+    discover,
     encode_segments,
     next_free_id,
 )
@@ -66,6 +70,11 @@ LED_TEST_PATTERN = encode_segments([(10, (255, 0, 0)), (10, (0, 255, 0)), (10, (
 _SCHEDULE_YEAR = 2016
 # The daily schedule update is tried again this much later when another app had the controller.
 BUSY_REFRESH_RETRY = timedelta(minutes=10)
+# Patterns tried on the lights are taken off after this long without a change, in case the page was closed while trying.
+TRIAL_SECONDS = 600
+HOLD_RETRY = timedelta(minutes=1)
+# While the controller can't be reached, it is looked for at a new address at most this often.
+FIND_MOVED_EVERY = timedelta(minutes=5)
 
 
 @dataclass(frozen=True)
@@ -85,6 +94,17 @@ class LedSession:
     effect: CurrentEffect | None
     setup: LedSetup
     ends_at: datetime
+    hold: Hold | None = None
+    cancel: CALLBACK_TYPE | None = None
+
+
+@dataclass
+class Trial:
+    """Patterns tried on the lights from the page: what to put back when the trying ends."""
+
+    switch_state: int
+    effect: CurrentEffect | None
+    hold: Hold | None
     cancel: CALLBACK_TYPE | None = None
 
 
@@ -117,6 +137,12 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         self.favourites: list[int] = []
         self.roofline = ROOFLINES[0]
         self.led_session: LedSession | None = None
+        self.trial: Trial | None = None
+        self.hold: Hold | None = None
+        self.hold_minutes: int | None = DEFAULT_HOLD_MINUTES
+        self._hold_timer: CALLBACK_TYPE | None = None
+        self._last_find: datetime | None = None
+        self._learnt_device_code = False
 
     async def async_load_stored(self) -> None:
         await self.sun.async_load()
@@ -126,6 +152,9 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         self.favourites = list(page.get("favourites", []))
         if page.get("roofline") in ROOFLINES:
             self.roofline = page["roofline"]
+        if page.get("hold_minutes", DEFAULT_HOLD_MINUTES) in HOLD_CHOICES:
+            self.hold_minutes = page.get("hold_minutes", DEFAULT_HOLD_MINUTES)
+        self.hold = Hold.from_dict(page.get("hold"))
 
     async def async_set_favourites(self, favourites: list[int]) -> None:
         """Built-in effects starred on the Trimlight page; kept in Home Assistant so every device sees the same ones."""
@@ -138,14 +167,22 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         await self._save_page()
 
     async def _save_page(self) -> None:
-        await self._page_store.async_save({"favourites": self.favourites, "roofline": self.roofline})
+        await self._page_store.async_save(self._page_data())
+
+    def _page_data(self) -> dict:
+        return {
+            "favourites": self.favourites,
+            "roofline": self.roofline,
+            "hold_minutes": self.hold_minutes,
+            "hold": None if self.hold is None else self.hold.as_dict(),
+        }
 
     async def _async_update_data(self) -> SyncState:
         if self.data is not None and self._write_lock.locked():
             # A change is being read back, and the controller may be silent for a while after one.
             return self.data
         try:
-            state = await self.client.sync(wait=0, linger=0)
+            state = await self._async_poll()
         except ControllerBusy as err:
             if self.data is None:
                 raise UpdateFailed(str(err)) from err
@@ -154,7 +191,61 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
             raise UpdateFailed(str(err)) from err
         self._follow_effect_settings(state.current_effect)
         await self._forget_removed_schedules(state)
+        self._check_hold(state)
+        if not self._learnt_device_code:
+            self._learnt_device_code = True
+            if CONF_DEVICE_CODE not in self.config_entry.data:
+                self.config_entry.async_create_background_task(self.hass, self._async_learn_device_code(), "trimlight_local device code")
         return state
+
+    async def _async_poll(self) -> SyncState:
+        try:
+            return await self.client.sync(wait=0, linger=0)
+        except ControllerBusy:
+            raise
+        except TrimlightError:
+            if not await self._async_find_moved():
+                raise
+            return await self.client.sync(wait=0, linger=0)
+
+    async def _async_find_moved(self) -> bool:
+        """Look for the controller at a new address by its device code; True when it was found and is used from now on."""
+        code = self.config_entry.data.get(CONF_DEVICE_CODE)
+        utcnow = dt_util.utcnow()
+        if not code or (self._last_find is not None and utcnow - self._last_find < FIND_MOVED_EVERY):
+            return False
+        self._last_find = utcnow
+        try:
+            found = await discover(timeout=2.0)
+        except OSError as err:
+            _LOGGER.debug("Discovery failed: %r", err)
+            return False
+        moved = next((d for d in found if d.device_code == code and d.host != self.client.host), None)
+        if moved is None:
+            return False
+        old = self.client.host
+        await self.client.close()
+        self.client.host = moved.host
+        self.hass.config_entries.async_update_entry(self.config_entry, data={**self.config_entry.data, CONF_HOST: moved.host})
+        _LOGGER.warning("The Trimlight controller moved from %s to %s", old, moved.host)
+        persistent_notification.async_create(
+            self.hass,
+            f"The Trimlight controller {self.config_entry.title} stopped answering at {old} and was found at {moved.host}. "
+            "Home Assistant uses the new address from now on. A DHCP reservation in your router keeps the address from changing.",
+            title="Trimlight controller moved",
+            notification_id=f"{DOMAIN}_moved_{self.config_entry.entry_id}",
+        )
+        return True
+
+    async def _async_learn_device_code(self) -> None:
+        """Note the controller's device code, which stays the same when its address changes."""
+        try:
+            found = await discover(timeout=2.0)
+        except OSError as err:
+            _LOGGER.debug("Discovery failed: %r", err)
+            return
+        if match := next((d for d in found if d.host == self.client.host and d.device_code), None):
+            self.hass.config_entries.async_update_entry(self.config_entry, data={**self.config_entry.data, CONF_DEVICE_CODE: match.device_code})
 
     async def _forget_removed_schedules(self, state: SyncState) -> None:
         # A schedule deleted in the phone app takes its sun setting with it. A short reply that lacks the calendar says nothing either way.
@@ -171,6 +262,195 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
     def busy(self) -> bool:
         """Another app, normally the phone app, had the controller at the last attempt to reach it."""
         return self.client.busy
+
+    def schedule_windows(self, state: SyncState, first: date, days: int) -> list[Window]:
+        """The nights the controller's schedules light, starting on `first`, for `days` days."""
+        zone = dt_util.get_default_time_zone()
+        windows = []
+        for day in (first + timedelta(days=n) for n in range(days)):
+            nights = [("calendar", s.id, s.effect_id, self.calendar_window(s, day)) for s in state.calendar if self.calendar_covers(s, day)]
+            nights += [("daily", i, d.effect_id, self.daily_window(i, d, day)) for i, d in enumerate(state.daily) if d.enabled and daily_runs_on(d.repeat, day)]
+            for kind, key, effect_id, (on, off) in nights:
+                end_day = day + timedelta(days=1) if off <= on else day
+                windows.append(Window(datetime.combine(day, on, zone), datetime.combine(end_day, off, zone), effect_id, kind, key))
+        return windows
+
+    def _windows_around(self, state: SyncState, moment: datetime) -> list[Window]:
+        return self.schedule_windows(state, moment.date() - timedelta(days=1), 3)
+
+    @property
+    def lit_by_schedule(self) -> Window | None:
+        """The schedule lighting the lights now, in timer mode."""
+        data = self.data
+        if data is None or data.switch_state != SwitchState.TIMER:
+            return None
+        moment = now()
+        return lit_window(self._windows_around(data, moment), moment)
+
+    @property
+    def lights_lit(self) -> bool | None:
+        """Whether the lights are lit: in manual mode, or in timer mode while a schedule runs."""
+        data = self.data
+        if data is None:
+            return None
+        if data.switch_state == SwitchState.TIMER:
+            return self.lit_by_schedule is not None
+        return data.switch_state == SwitchState.MANUAL
+
+    @property
+    def controlled_by(self) -> str | None:
+        data = self.data
+        if data is None:
+            return None
+        if data.switch_state == SwitchState.TIMER:
+            return BY_SCHEDULE
+        if self.trial is not None:
+            return BY_YOU
+        return self.hold.by if self.hold is not None else BY_APP
+
+    @property
+    def back_to_schedule_at(self) -> datetime | None:
+        data = self.data
+        if data is None or data.switch_state == SwitchState.TIMER or self.hold is None:
+            return None
+        return self.hold.until
+
+    def control_summary(self) -> dict:
+        """Who runs the lights and until when, for the Trimlight page."""
+        lit = self.lit_by_schedule
+        until = self.back_to_schedule_at
+        return {
+            "lit": self.lights_lit,
+            "by": self.controlled_by,
+            "until": None if until is None else until.isoformat(),
+            "window": None if lit is None else {"effect": self.saved_effect_name(lit.effect_id), "effect_id": lit.effect_id, "end": lit.end.isoformat()},
+            "hold_minutes": self.hold_minutes,
+            "hold_choices": list(HOLD_CHOICES),
+            "trying": self.trial is not None,
+        }
+
+    def _suspended(self) -> bool:
+        """An LED test or a pattern being tried on the lights puts things back itself, so it starts no hold."""
+        return self.trial is not None or self.led_session is not None
+
+    def _new_hold(self, by: str, state: SyncState) -> Hold:
+        """A change lasts `hold_minutes`, or until the schedules next switch the lights on or off if that is sooner."""
+        if self.hold_minutes is None:
+            return Hold(by, None)
+        moment = now()
+        until = moment + timedelta(minutes=self.hold_minutes)
+        change = next_change(self._windows_around(state, moment), moment)
+        return Hold(by, until if change is None else min(until, change))
+
+    def _set_hold(self, hold: Hold | None) -> None:
+        if self._hold_timer is not None:
+            self._hold_timer()
+            self._hold_timer = None
+        changed = hold != self.hold
+        self.hold = hold
+        if hold is not None and hold.until is not None:
+            self._hold_timer = async_track_point_in_utc_time(self.hass, HassJob(self._hold_ended, cancel_on_shutdown=True), dt_util.as_utc(hold.until))
+        if changed:
+            self._page_store.async_delay_save(self._page_data, 1)
+
+    def _note_change(self, switch_state: int) -> None:
+        if self._suspended():
+            if self.trial is not None:
+                self._restart_trial_timer()
+            return
+        if switch_state == SwitchState.TIMER:
+            self._set_hold(None)
+        elif self.data is not None:
+            self._set_hold(self._new_hold(BY_YOU, self.data))
+
+    def _check_hold(self, state: SyncState) -> None:
+        """Follow mode changes made elsewhere: leaving timer mode starts a hold, and an ended hold returns to it."""
+        if self._suspended():
+            return
+        if state.switch_state == SwitchState.TIMER:
+            if self.hold is not None:
+                self._set_hold(None)
+        elif self.hold is None:
+            self._set_hold(self._new_hold(BY_APP, state))
+        elif self.hold.until is not None and self._hold_timer is None:
+            if self.hold.until <= now():
+                self._hold_ended(dt_util.utcnow())
+            else:
+                self._set_hold(self.hold)
+
+    @callback
+    def _hold_ended(self, _: datetime) -> None:
+        self._hold_timer = None
+        self.config_entry.async_create_background_task(self.hass, self._async_end_hold(), "trimlight_local back to schedule")
+
+    async def _async_end_hold(self) -> None:
+        if not self._suspended():
+            try:
+                await self.async_resume_schedule()
+                return
+            except HomeAssistantError as err:
+                _LOGGER.info("Could not put the lights back on their schedules yet: %s", err)
+        if self._hold_timer is None:
+            self._hold_timer = async_call_later(self.hass, HOLD_RETRY, HassJob(self._hold_ended, cancel_on_shutdown=True))
+
+    async def async_resume_schedule(self) -> None:
+        """Hand the lights back to the schedules (timer mode)."""
+        await self.async_set_switch_state(SwitchState.TIMER)
+
+    async def async_keep_change(self) -> None:
+        """Make the change showing now last until something else is changed."""
+        data = self._require_data()
+        if data.switch_state != SwitchState.TIMER:
+            self._set_hold(Hold(self.hold.by if self.hold is not None else BY_APP, None))
+            self.async_update_listeners()
+
+    async def async_set_hold_minutes(self, minutes: int | None) -> None:
+        if minutes not in HOLD_CHOICES:
+            raise ServiceValidationError(f"A change can last {', '.join(str(m) for m in HOLD_CHOICES if m)} minutes, or until it is changed")
+        self.hold_minutes = minutes
+        await self._save_page()
+        self.async_update_listeners()
+
+    async def async_try(self, on: bool) -> None:
+        """Start or end trying patterns on the lights; at the end, what showed before is put back."""
+        if not on:
+            await self._async_end_trial()
+            return
+        if self.trial is None:
+            data = self._require_data()
+            self.trial = Trial(data.switch_state, data.current_effect, self.hold)
+        self._restart_trial_timer()
+        self.async_update_listeners()
+
+    def _restart_trial_timer(self) -> None:
+        if (trial := self.trial) is None:
+            return
+        if trial.cancel:
+            trial.cancel()
+        trial.cancel = async_call_later(self.hass, TRIAL_SECONDS, HassJob(self._trial_expired, cancel_on_shutdown=True))
+
+    @callback
+    def _trial_expired(self, _: datetime) -> None:
+        if self.trial is not None:
+            self.trial.cancel = None
+            self.config_entry.async_create_background_task(self.hass, self._async_end_trial(), "trimlight_local end trying")
+
+    async def _async_end_trial(self) -> None:
+        if (trial := self.trial) is None:
+            return
+        if trial.cancel:
+            trial.cancel()
+        self.trial = None
+        try:
+            data = self.data
+            if trial.switch_state == SwitchState.MANUAL:
+                if data is None or (data.switch_state, data.current_effect) != (SwitchState.MANUAL, trial.effect):
+                    await self._async_restore_effect(trial.effect)
+            elif data is None or data.switch_state != trial.switch_state:
+                await self.async_set_switch_state(SwitchState(trial.switch_state))
+        finally:
+            self._set_hold(None if trial.switch_state == SwitchState.TIMER else trial.hold)
+            self.async_update_listeners()
 
     def _follow_effect_settings(self, current: CurrentEffect | None) -> None:
         if current is None:
@@ -541,10 +821,16 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         await self.async_refresh_schedules()
 
     @callback
-    def async_cancel_refresh_retry(self) -> None:
+    def async_cancel_timers(self) -> None:
         if self._refresh_retry is not None:
             self._refresh_retry()
             self._refresh_retry = None
+        if self._hold_timer is not None:
+            self._hold_timer()
+            self._hold_timer = None
+        if self.trial is not None and self.trial.cancel is not None:
+            self.trial.cancel()
+            self.trial.cancel = None
 
     async def async_refresh_holiday_dates(self) -> None:
         """Put each holiday schedule on the controller for the next nights it gets, once the last ones have passed.
@@ -801,13 +1087,14 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
             if session.switch_state != SwitchState.MANUAL:
                 await self.async_set_switch_state(SwitchState(session.switch_state))
         finally:
+            self._set_hold(None if session.switch_state == SwitchState.TIMER else session.hold)
             self.async_update_listeners()
 
     async def _async_begin_led_session(self) -> None:
         if self.led_session is not None:
             return
         data = self._require_data()
-        self.led_session = LedSession(data.switch_state, data.current_effect, self.led_setup(), dt_util.utcnow() + timedelta(seconds=LED_TEST_SECONDS))
+        self.led_session = LedSession(data.switch_state, data.current_effect, self.led_setup(), dt_util.utcnow() + timedelta(seconds=LED_TEST_SECONDS), self.hold)
         await self._ensure_manual()
 
     def _restart_led_timer(self) -> None:
@@ -893,6 +1180,7 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         if (data := self.data) is None:
             return
         self._follow_effect_settings(current_effect)
+        self._note_change(switch_state)
         # `raw` is kept, which is how entities tell this assumed state from a real poll.
         self.async_set_updated_data(dataclasses.replace(data, switch_state=switch_state, current_effect=current_effect or data.current_effect))
 
@@ -909,12 +1197,13 @@ def next_schedule_day(days: set[int], today: date) -> date:
 
 def next_daily_day(repeat: int, today: date) -> date:
     """The next date, from today on, that a daily schedule with this repeat setting runs."""
-    for n in range(7):
-        day = today + timedelta(days=n)
-        weekend = day.weekday() >= 5
-        if repeat in (Repeat.TODAY_ONLY, Repeat.EVERY_DAY) or (repeat == Repeat.WEEKDAYS and not weekend) or (repeat == Repeat.WEEKEND and weekend):
-            return day
-    return today
+    return next((day for day in (today + timedelta(days=n) for n in range(7)) if daily_runs_on(repeat, day)), today)
+
+
+def daily_runs_on(repeat: int, day: date) -> bool:
+    # The controller doesn't report which day a "today only" schedule was set for, so it counts as every day.
+    weekend = day.weekday() >= 5
+    return repeat in (Repeat.TODAY_ONLY, Repeat.EVERY_DAY) or (repeat == Repeat.WEEKDAYS and not weekend) or (repeat == Repeat.WEEKEND and weekend)
 
 
 def month_days(window: tuple[date, date]) -> tuple[tuple[int, int], tuple[int, int]]:
