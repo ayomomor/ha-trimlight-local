@@ -1073,6 +1073,42 @@ async def test_hold_length_and_trying_patterns(hass: HomeAssistant, controller, 
     await hass.async_block_till_done()
 
 
+async def test_the_page_sets_how_long_a_change_lasts(hass: HomeAssistant, controller, hass_ws_client) -> None:
+    use_fixture(controller, "sync_reply.hex")
+    controller.switch_state = 2
+    moment = local(2026, 11, 25, 15, 0)
+    switch = local(2026, 11, 25, 16, 27)
+    with patch(NOW, return_value=moment):
+        entry = await setup_entry(hass)
+        coordinator = entry.runtime_data
+        ws = await hass_ws_client(hass)
+
+        async def hold(msg_id: int, **fields) -> dict:
+            await ws.send_json({"id": msg_id, "type": "trimlight_local/hold_for", "entity_id": LIGHT, **fields})
+            return await ws.receive_json()
+
+        await ws.send_json({"id": 1, "type": "trimlight_local/state", "entity_id": LIGHT})
+        page = (await ws.receive_json())["result"]
+        assert {"start": switch.isoformat(), "effect": "Simple", "kind": "calendar"}.items() <= page["control"]["windows"][0].items()
+        await hass.services.async_call(LIGHT_DOMAIN, "turn_on", {ATTR_ENTITY_ID: LIGHT, ATTR_EFFECT: "Rainbow Wave"}, blocking=True)
+        await settle(hass)
+        assert coordinator.hold.until == moment + timedelta(hours=1)
+        ends = []
+        for msg_id, fields in enumerate(({"length": 30}, {"length": 120}, {"length": "schedule"}, {"length": "forever"}, {"until": local(2026, 11, 25, 15, 45).isoformat()}), start=2):
+            assert (await hold(msg_id, **fields))["success"]
+            ends.append(coordinator.hold.until)
+        assert ends == [moment + timedelta(minutes=30), switch, switch, None, local(2026, 11, 25, 15, 45)]
+        assert hass.states.get(LIGHT).attributes["back_to_schedule_at"] == local(2026, 11, 25, 15, 45).isoformat()
+        assert not (await hold(7))["success"]
+        assert not (await hold(8, length=45))["success"]
+        await call(hass, "resume_schedule", {})
+        assert (await hold(9, length=60))["success"]
+        assert coordinator.hold is None and controller.switch_state == 2
+
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
 async def test_controller_found_at_a_new_address(hass: HomeAssistant, controller) -> None:
     # The old address must refuse the connection, as a controller that moved does, rather than be blocked by the test plugin.
     pytest_socket.socket_allow_hosts(["127.0.0.1", "127.0.0.2"])

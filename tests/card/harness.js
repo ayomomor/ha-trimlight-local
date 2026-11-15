@@ -3,10 +3,12 @@ const MODES = ["static", "chase_forward", "chase_backward", "chase_middle_to_out
   "comet_forward", "comet_backward", "comet_middle_to_out", "comet_out_to_middle", "wave_forward", "wave_backward",
   "wave_middle_to_out", "wave_out_to_middle", "strobe", "solid_fade", "full_strobe", "twinkle", "firework", "inside_out"];
 const BUILTINS = ["Rainbow Gradual Chase", "Rainbow Comet", "Rainbow Segment", "Rainbow Wave", "Rainbow Meteor", "Rainbow Gradual", "Rainbow Jump", "Rainbow Twinkle", "Rainbow Fade In Out", "Rainbow Rebound", "Red Stacking", "Green Stacking", "Blue Stacking", "Yellow Stacking", "Cyan Stacking", "Purple Stacking", "White Stacking", "Full Color Stack", "Red to Green Stack", "Green to Blue Stack", "Blue to Yellow Stack", "Yellow to Cyan Stack", "Cyan to Purple Stack", "Purple to White Stack", "Red Comet", "Green Comet", "Blue Comet", "Yellow Comet", "Cyan Comet", "Purple Comet", "White Comet", "Red Meteor", "Green Meteor", "Blue Meteor", "Yellow Meteor", "Cyan Meteor", "Purple Meteor", "White Meteor", "Red Wave", "Green Wave", "Blue Wave", "Yellow Wave", "Cyan Wave", "Purple Wave", "White Wave", "Red Green Wave", "Red Blue Wave", "Red Yellow Wave", "Red Cyan Wave", "Red Purple Wave", "Red White Wave", "Green Blue Wave", "Green Yellow Wave", "Green Cyan Wave", "Green Purple Wave", "Green White Wave", "Blue Yellow Wave", "Blue Cyan Wave", "Blue Purple Wave", "Blue White Wave", "Yellow Cyan Wave", "Yellow Purple Wave", "Yellow White Wave", "Cyan Purple Wave", "Cyan White Wave", "Purple White Wave", "Red Dot Pulse", "Green Dot Pulse", "Blue Dot Pulse", "Yellow Dot Pulse", "Cyan Dot Pulse", "Purple Dot Pulse", "White Dot Pulse", "Red Green Blank Pulse", "Green Blue Blank Pulse", "Blue Yellow Blank Pulse", "Yellow Cyan Blank Pulse", "Cyan Purple Blank Pulse", "Purple White Blank Pulse", "Red with Purple Pulse", "Green with Cyan Pulse", "Blue with Yellow Pulse", "Yellow with Blue Pulse", "Cyan with Green Pulse", "Purple with Purple Pulse", "Red Comet Rebound", "Green Comet Rebound", "Blue Comet Rebound", "Yellow Comet Rebound", "Cyan Comet Rebound", "Purple Comet Rebound", "White Comet Rebound", "Red Dot Rebound", "Green Dot Rebound", "Blue Dot Rebound", "Yellow Dot Rebound", "Cyan Dot Rebound", "Purple Dot Rebound", "White Dot Rebound", "Red Segment Rebound", "Green Segment Rebound", "Blue Segment Rebound", "Yellow Segment Rebound", "Cyan Segment Rebound", "Purple Segment Rebound", "White Segment Rebound", "Red Green Gradual Snake", "Red Blue Gradual Snake", "Red Yellow Gradual Snake", "Red Cyan Gradual Snake", "Red Purple Gradual Snake", "Red White Gradual Snake", "Green Blue Gradual Snake", "Green Yellow Gradual Snake", "Green Cyan Gradual Snake", "Green Purple Gradual Snake", "Green White Gradual Snake", "Blue Yellow Gradual Snake", "Blue Cyan Gradual Snake", "Blue Purple Gradual Snake", "Blue White Gradual Snake", "Yellow Cyan Gradual Snake", "Yellow Purple Gradual Snake", "Yellow White Gradual Snake", "Cyan Purple Gradual Snake", "Cyan White Gradual Snake", "Purple White Gradual Snake", "Red White Blank Snake", "Green White Blank Snake", "Blue White Blank Snake", "Yellow White Blank Snake", "Cyan White Blank Snake", "Purple White Blank Snake", "Green Yellow White Snake", "Red Green White Snake", "Red Yellow Snake", "Red White Snake", "Green White Snake", "Red Twinkle", "Green Twinkle", "Blue Twinkle", "Yellow Twinkle", "Cyan Twinkle", "Purple Twinkle", "White Twinkle", "Red Background Twinkle", "Green Background Twinkle", "Blue Background Twinkle", "Yellow Background Twinkle", "Cyan Background Twinkle", "Purple Background Twinkle", "Red White Background Twinkle", "Green White Background Twinkle", "Blue White Background Twinkle", "Yellow White Background Twinkle", "Cyan White Background Twinkle", "Purple White Background Twinkle", "White White Background Twinkle", "Red Breath", "Green Breath", "Blue Breath", "Yellow Breath", "Cyan Breath", "Purple Breath", "White Breath", "Red Yellow Fire", "Red Purple Fire", "Green Yellow Fire", "Green Cyan Fire", "Blue Purple Fire", "Blue Cyan Fire", "Red Strobe", "Green Strobe", "Blue Strobe", "Yellow Strobe", "Cyan Strobe", "Purple Strobe", "White Strobe", "Red Blue White Strobe", "Full Color Strobe"];
+const inHours = (hours) => new Date(Date.now() + hours * 3600000).toISOString();
 const STATE = {
   entities: { light: "light.porch", mode: "select.porch_mode", calendar: "calendar.porch_schedules" },
   switch_state: "off",
-  control: { lit: false, by: "you", until: "2026-11-10T03:00:00+00:00", window: null, hold_minutes: 60, hold_choices: [30, 60, 120, 240, null], trying: false,
+  control: { lit: false, by: "schedule", until: null, window: null, windows: [{ start: inHours(3), end: inHours(7), effect: "CHRISTMAS", kind: "calendar" }],
+    hold_minutes: 60, hold_choices: [30, 60, 120, 240, null],
     music: { on: false, speaker: null, delay_ms: 0, effect: 0, color: [255, 0, 0], length: 30, sensitivity: 13, status: "off", detail: null, title: null, delay_range: [-1000, 3000] } },
   modes: MODES.map((key) => ({ key, name: key.charAt(0).toUpperCase() + key.slice(1).replaceAll("_", " ") })),
   repeats: ["today_only", "every_day", "weekdays", "weekend"],
@@ -98,6 +100,7 @@ function calendarEvents(path) {
 }
 
 const calls = [];
+let tourSeen = true;
 const wsCalls = [];
 const stamp = (id) => ({ entity_id: id, state: "on", last_updated: "1", attributes: {} });
 const hass = {
@@ -118,7 +121,18 @@ const hass = {
       STATE.waiting = STATE.waiting.filter((w) => w.id !== msg.waiting_id);
       return {};
     }
-    if (/^trimlight_local\/(try|hold_minutes|music_follow)$/.test(msg.type)) {
+    if (msg.type === "trimlight_local/hold_for") {
+      wsCalls.push(msg);
+      const length = msg.length;
+      STATE.control.until = msg.until || (length === "forever" ? null : length === "schedule" ? STATE.control.windows[0].start : inHours(length / 60));
+      return {};
+    }
+    if (msg.type === "frontend/get_user_data") return { value: tourSeen };
+    if (msg.type === "frontend/set_user_data") {
+      wsCalls.push(msg);
+      return {};
+    }
+    if (/^trimlight_local\/(hold_minutes|music_follow)$/.test(msg.type)) {
       wsCalls.push(msg);
       if (msg.type === "trimlight_local/music_follow") {
         const { type, entity_id, ...changes } = msg;
@@ -136,6 +150,10 @@ const hass = {
   },
   callService: async (domain, service, data, target) => {
     calls.push({ domain, service, data, target });
+    // Like the integration: every change made by you starts a hold of the default length, and the schedule takes back over on request.
+    if ((domain === "light" && service === "turn_on") || ["show_saved_effect", "show_effect", "show_pattern"].includes(service)) Object.assign(STATE.control, { by: "you", lit: true, until: inHours(1) });
+    if (domain === "light" && service === "turn_off") Object.assign(STATE.control, { by: "you", lit: false, until: inHours(1) });
+    if (service === "resume_schedule") Object.assign(STATE.control, { by: "schedule", lit: false, until: null });
   },
   callApi: async (method, path) => {
     if (method !== "GET" || !path.startsWith("calendars/calendar.porch_schedules?")) throw new Error(`unexpected ${method} ${path}`);
@@ -239,6 +257,7 @@ async function testCard() {
 }
 
 async function testPage() {
+  Object.assign(STATE.control, { by: "schedule", lit: false, until: null });
   const page = makePage();
   await tick();
   const { $, $$ } = inside(page);
@@ -248,37 +267,37 @@ async function testPage() {
 
   check("page: seven tabs", $$(".tab").map((t) => t.textContent).join() === "Patterns,Effects,Music,Schedules,Daily,Combined effect,Settings", $$(".tab").map((t) => t.textContent).join());
   const withLight = (state, stamp) => ({ ...hass, states: { ...hass.states, "light.porch": { ...hass.states["light.porch"], state, last_updated: stamp } } });
-  check("page: Now says the lights are off, who set that and until when", $(".now b").textContent === "Lights off" && $(".now small").textContent.startsWith("Set by you · back to schedule at"), $(".now small").textContent);
-  check("page: one power button instead of Off, Manual and Timer", $$('[data-act="mode"]').length === 0 && act("power").textContent.trim() === "Turn on" && !!act("keep") && !!act("resume"));
+  check("page: the top says the lights are on schedule, and what comes next",
+    $(".now .status").textContent.trim() === "On schedule" && $(".now b").textContent === "Lights off" && /^Next on (today|tomorrow) at .*CHRISTMAS/.test($(".now small").textContent), $(".now").textContent);
+  check("page: On schedule or On, with no Turn off, Keep or Change how long",
+    act("mode-schedule").getAttribute("aria-pressed") === "true" && act("mode-on").getAttribute("aria-pressed") === "false" && !act("power") && !act("keep") && !act("change-time"));
   check("page: the roofline shows the roof, dark while off", $(".hero .tag").textContent === "Lights off", $(".hero .tag").textContent);
-  act("power").click();
-  check("page: Turn on shows at once, before the controller answers", $(".now b").textContent === "CANADA DAY" && $(".hero .tag").textContent === "On the roof now · approximate", $(".now b").textContent);
-  await tick();
-  check("page: Turn on turns the light on", JSON.stringify(calls.find((c) => c.domain === "light")) === JSON.stringify({ domain: "light", service: "turn_on", data: {}, target: { entity_id: "light.porch" } }), JSON.stringify(calls));
-  page.hass = withLight("on", "on1");
-  await tick();
-  act("resume").click();
-  check("page: Back to schedule hands over at once", $(".now small").textContent.startsWith("By schedule"), $(".now small").textContent);
-  await tick();
-  check("page: Back to schedule calls its service", last().service === "resume_schedule" && last().domain === "trimlight_local", JSON.stringify(last()));
-  page.hass = hass;
-  await tick();
+  check("page: no walkthrough for someone who has seen it", !$(".tour"));
 
   // Patterns
-  check("patterns: opens the saved pattern on the roof, with no unsaved copy in the rail", $$('[data-act="open"]').map((b) => b.dataset.key).join() === "new,6,7,9" && $(".editor-head h2").textContent === "CANADA DAY", $(".editor-head h2") ? $(".editor-head h2").textContent : "");
-  check("patterns: each saved pattern has a play button, and the editor has no Show or Live preview", $$('[data-act="show-saved"]').map((b) => b.dataset.key).join() === "6,7,9" && !act("show-pattern") && !$('[data-in="live"]') && !!$('[data-in="try"]'));
-  act("open", "new").click();
-  await tick();
-  check("patterns: a new pattern says so, with a name hint instead of a form label", $(".editor-head h2").textContent === "New pattern" && $('[data-in="name"]').placeholder === "e.g. Fourth of July");
+  check("patterns: nothing is picked when the page opens", $$('[data-act="open"]').map((b) => b.dataset.key).join() === "new,6,7,9" && !$('.rail [aria-current="true"]') && $(".editor h2").textContent === "Nothing picked yet",
+    $(".editor h2") ? $(".editor h2").textContent : "");
+  check("patterns: no play buttons, and no Try on the lights", !act("show-saved") && !act("play-draft") && !$('[data-in="try"]'));
+  const quiet = calls.length;
   act("open", 7).click();
   await tick();
+  check("patterns: picking a pattern while on schedule only picks it", calls.length === quiet && !$(".chooser") && act("open", 7).getAttribute("aria-current") === "true" && $(".hint").textContent.includes("tap On"), JSON.stringify(calls.slice(quiet)));
   check("patterns: HALLOWEEN opens with its name, mode and colours", $('[data-in="name"]').value === "HALLOWEEN" && $('[data-in="mode"]').value === "chase_forward" && $$(".tile").length === 3);
   check("patterns: overlay shows lightning, delete is blocked", act("overlay", "lightning").getAttribute("aria-pressed") === "true" && act("delete-pattern").disabled);
-  act("show-saved", 7).click();
+  act("mode-on").click();
   await tick();
-  check("patterns: the play button shows the saved pattern from the controller's memory, overlay and all", JSON.stringify(last().data) === JSON.stringify({ effect_id: 7 }) && last().service === "show_saved_effect", JSON.stringify(last()));
-  page.hass = withLight("on", "on2");
+  const offered = $$(".chooser .opt").map((o) => o.dataset.key).join();
+  check("page: On asks how long for the pick, with nothing chosen for you", $(".chooser h2").textContent === "Turn on HALLOWEEN for how long?" && offered === "30,60,120,schedule,forever" && !$('.chooser .opt[aria-current="true"]'), offered);
+  act("choose", "60").click();
   await tick();
+  await tick();
+  check("page: choosing 1 hour shows the pick from the controller's memory, then sets how long",
+    JSON.stringify(calls.slice(quiet).map((c) => [c.service, c.data])) === JSON.stringify([["show_saved_effect", { effect_id: 7 }]])
+    && JSON.stringify(wsCalls.at(-1)) === JSON.stringify({ type: "trimlight_local/hold_for", entity_id: "light.porch", length: 60 }), JSON.stringify([calls.slice(quiet), wsCalls.at(-1)]));
+  page.hass = withLight("on", "on1");
+  await tick();
+  check("page: On counts down, and says what happens after", act("mode-on").getAttribute("aria-pressed") === "true" && /^On · (59:\d\d|1:00:00) left$/.test($(".now .status").textContent.trim()) && $(".now small").textContent.includes("then your schedule"),
+    `${$(".now .status").textContent} | ${$(".now small").textContent}`);
   const before = calls.length;
   act("overlay", "snow").click();
   check("patterns: Snow shows as chosen at once", act("overlay", "snow").getAttribute("aria-pressed") === "true");
@@ -293,29 +312,31 @@ async function testPage() {
   $('[data-act="move"][data-step="1"]').click();
   await tick();
   check("patterns: move right swaps colours", $$(".tile")[1].querySelector(".sw.unlit") !== null);
-  const tryBox = $('[data-in="try"]');
-  tryBox.checked = true;
-  tryBox.dispatchEvent(new Event("change", { bubbles: true }));
   await new Promise((resolve) => setTimeout(resolve, 800));
-  check("patterns: Try on the lights starts trying, then shows the edited pattern",
-    JSON.stringify(wsCalls.at(-1)) === JSON.stringify({ type: "trimlight_local/try", entity_id: "light.porch", on: true })
-    && JSON.stringify(last().data) === JSON.stringify({ mode: "chase_forward", colors: ["#7700ff", "none", "#7800ff"], dots: [5, 5, 5], speed: 1, brightness: 255 }), JSON.stringify([wsCalls.at(-1), last()]));
-  check("patterns: while trying, the roofline and the note say so", $(".hero .tag").textContent === "Trying on the lights · approximate" && $$(".editor .note").some((n) => n.textContent.includes("go back")), $(".hero .tag").textContent);
-  const tryAgain = $('[data-in="try"]');
-  tryAgain.checked = false;
-  tryAgain.dispatchEvent(new Event("change", { bubbles: true }));
-  await tick();
-  check("patterns: stopping puts the lights back", JSON.stringify(wsCalls.at(-1)) === JSON.stringify({ type: "trimlight_local/try", entity_id: "light.porch", on: false }) && $(".hero .tag").textContent !== "Trying on the lights · approximate", JSON.stringify(wsCalls.at(-1)));
-  page.hass = hass;
-  await tick();
+  check("patterns: while On, edits show on the lights and keep the time",
+    JSON.stringify(last().data) === JSON.stringify({ mode: "chase_forward", colors: ["#7700ff", "none", "#7800ff"], dots: [5, 5, 5], speed: 1, brightness: 255 })
+    && !!wsCalls.at(-1).until && !!$(".live-chip"), JSON.stringify([last(), wsCalls.at(-1)]));
   const name = $('[data-in="name"]');
   name.value = "Spooky";
   name.dispatchEvent(new Event("input", { bubbles: true }));
-  await tick();
+  await new Promise((resolve) => setTimeout(resolve, 800));
   check("patterns: a new name offers Save as new and Rename", act("save-pattern").textContent.trim() === "Save as new" && !act("rename-pattern").disabled);
   act("save-pattern").click();
   await tick();
   check("patterns: Save as new saves under the new name", last().service === "save_effect" && last().data.name === "Spooky" && last().data.colors[1] === "none", JSON.stringify(last()));
+  const onAlready = calls.length;
+  act("open", 6).click();
+  await tick();
+  await tick();
+  check("patterns: while On, picking shows at once without asking, and keeps the time",
+    !$(".chooser") && JSON.stringify(calls.slice(onAlready).map((c) => [c.service, c.data])) === JSON.stringify([["show_saved_effect", { effect_id: 6 }]]) && !!wsCalls.at(-1).until,
+    JSON.stringify([calls.slice(onAlready), wsCalls.at(-1)]));
+  act("mode-schedule").click();
+  check("page: On schedule hands back at once", $(".now .status").textContent.trim() === "On schedule", $(".now .status").textContent);
+  await tick();
+  check("page: On schedule calls its service", last().service === "resume_schedule" && last().domain === "trimlight_local", JSON.stringify(last()));
+  page.hass = hass;
+  await tick();
 
   // Effects
   await tab("effects");
@@ -330,10 +351,20 @@ async function testPage() {
   search.dispatchEvent(new Event("input", { bubbles: true }));
   await tick();
   check("effects: search finds Rainbow Wave", $$(".fx").length === 1 && $(".fx .name").textContent === "Rainbow Wave");
+  const fxQuiet = calls.length;
   $(".fx").click();
   await tick();
-  check("effects: tapping a card shows it with its settings",
-    JSON.stringify(last()) === JSON.stringify({ domain: "trimlight_local", service: "show_effect", data: { effect: "Rainbow Wave", speed: 100, length: 30, reverse: false, brightness: 255 }, target: { entity_id: "light.porch" } }), JSON.stringify(last()));
+  check("effects: tapping a card while on schedule only picks it", calls.length === fxQuiet && $(".fx").getAttribute("aria-pressed") === "true" && $(".hint").textContent.includes("tap On"), JSON.stringify(calls.slice(fxQuiet)));
+  act("mode-on").click();
+  await tick();
+  check("effects: On starts with the picked effect", $(".chooser h2").textContent === "Turn on Rainbow Wave for how long?", $(".chooser h2") && $(".chooser h2").textContent);
+  act("choose", "forever").click();
+  await tick();
+  await tick();
+  check("effects: it shows with its settings, until you change it",
+    JSON.stringify(calls.at(-1)) === JSON.stringify({ domain: "trimlight_local", service: "show_effect", data: { effect: "Rainbow Wave", speed: 100, length: 30, reverse: false, brightness: 255 }, target: { entity_id: "light.porch" } })
+    && JSON.stringify(wsCalls.at(-1)) === JSON.stringify({ type: "trimlight_local/hold_for", entity_id: "light.porch", length: "forever" })
+    && $(".now .status").textContent.trim() === "On · until you change it", JSON.stringify([calls.at(-1), wsCalls.at(-1), $(".now .status").textContent]));
   act("favourite", 3).click();
   await tick();
   check("effects: the star saves favourites in Home Assistant", JSON.stringify(wsCalls.at(-1)) === JSON.stringify({ type: "trimlight_local/favourites", entity_id: "light.porch", favourites: [0, 3] }), JSON.stringify(wsCalls.at(-1)));
@@ -341,6 +372,38 @@ async function testPage() {
   await tick();
   await tick();
   check("effects: Save shows the effect, then saves it by name", calls.at(-2).service === "show_effect" && last().service === "save_effect" && last().data.name === "Rainbow Wave", JSON.stringify(calls.slice(-2)));
+  page.hass = withLight("on", "fx-on");
+  await tick();
+  const outside = document.createElement("a");
+  outside.href = "/config";
+  outside.textContent = "Settings";
+  document.body.append(outside);
+  const here = location.href;
+  const stopLeaving = (ev) => ev.preventDefault();
+  document.addEventListener("click", stopLeaving, true);
+  outside.click();
+  document.removeEventListener("click", stopLeaving, true);
+  outside.remove();
+  await tick();
+  check("page: leaving while still On after switching from On schedule asks first", location.href === here && $(".chooser h2").textContent === "Your lights are still On", $(".chooser h2") && $(".chooser h2").textContent);
+  act("leave-stay").click();
+  await tick();
+  check("page: Stay here keeps you on the page", !$(".chooser"));
+  page.remove();
+  document.getElementById("page").append(page);
+  await tick();
+  check("page: coming back while On picks what is still on", $('[data-act="tab"][aria-selected="true"]').dataset.key === "patterns" && act("open", 6).getAttribute("aria-current") === "true",
+    $('[data-act="tab"][aria-selected="true"]').dataset.key);
+  act("mode-schedule").click();
+  await tick();
+  await tab("effects");
+  act("save-effect").click();
+  await tick();
+  await tick();
+  await tick();
+  check("effects: saving while on schedule hands the lights back afterwards", JSON.stringify(calls.slice(-3).map((c) => c.service)) === JSON.stringify(["show_effect", "save_effect", "resume_schedule"]), JSON.stringify(calls.slice(-3)));
+  page.hass = hass;
+  await tick();
 
   // Music
   await tab("music");
@@ -378,7 +441,7 @@ async function testPage() {
   await tick();
   check("music: it says what it follows, and the header too", $(".follow-status").textContent === "Following Kitchen: Jingle Bells." && $(".now small").textContent.startsWith("Following the music on Kitchen") && !!act("follow", "off"), $(".follow-status").textContent + " | " + $(".now small").textContent);
   STATE.control.music = { ...STATE.control.music, on: false, status: "off", title: null };
-  STATE.control.by = "you";
+  Object.assign(STATE.control, { by: "you", until: inHours(1) });
   page.hass = hass;
   await tick();
 
@@ -516,6 +579,16 @@ async function testPage() {
   const pressed = (name) => $$(`[data-act="${name}"]`).filter((b) => b.getAttribute("aria-pressed") === "true").map((b) => b.textContent.trim()).join();
   const lastWs = () => wsCalls.at(-1);
   const sent = (n) => JSON.stringify(wsCalls.slice(-n).map(({ type, entity_id, ...rest }) => [type.split("/")[1], rest]));
+  check("settings: Disable the lights comes first", $(".card h2").textContent === "Disable the lights" && !!act("disable"));
+  act("disable").click();
+  await tick();
+  await tick();
+  check("settings: Disable turns the lights off until enabled", JSON.stringify(last()) === JSON.stringify({ domain: "light", service: "turn_off", data: {}, target: { entity_id: "light.porch" } })
+    && JSON.stringify(wsCalls.at(-1)) === JSON.stringify({ type: "trimlight_local/hold_for", entity_id: "light.porch", length: "forever" })
+    && $(".now .status").textContent.trim() === "Disabled" && !!act("enable") && !$(".now .modes"), JSON.stringify([last(), wsCalls.at(-1), $(".now .status").textContent]));
+  act("enable").click();
+  await tick();
+  check("settings: Enable hands the lights back to the schedule", last().service === "resume_schedule" && $(".now .status").textContent.trim() === "On schedule", JSON.stringify(last()));
   check("settings: shows the firmware, chip, colour order and four ports", $(".facts").textContent.includes("1.11") && pressed("led-chip") === "UCS1903" && pressed("led-order") === "RGB"
     && $$(".ports tbody tr").length === 4 && $('[data-in="port-end"][data-key="0"]').value === "200", `${pressed("led-chip")} ${pressed("led-order")}`);
   check("settings: no test banner before a test", !$(".session"));
@@ -584,7 +657,26 @@ async function testPage() {
   act("rename-controller").click();
   await tick();
   check("settings: Rename sends the trimmed name", sent(1) === '[["rename",{"name":"Roofline"}]]' && $('[data-in="ctl-name"]').value === "Roofline" && act("rename-controller").disabled, sent(1));
+
+  // Help and the walkthrough
+  act("help").click();
+  await tick();
+  check("help: the ? opens an explanation", $(".chooser .help h2").textContent === "How the Trimlight page works" && $(".chooser .help").textContent.includes("tap On first") === false && $(".chooser .help").textContent.includes("On starts with what you picked"));
+  act("tour").click();
+  await tick();
+  check("help: Show the walkthrough starts it", !$(".chooser") && $(".tour h2").textContent === "Your roof" && $(".tour .count").textContent === "1 of 6");
+  act("tour-next").click();
+  await tick();
+  check("help: the second step is What's on now", $(".tour h2").textContent === "What's on now", $(".tour h2").textContent);
+  act("tour-end").click();
+  await tick();
+  check("help: Skip ends it and remembers that for this user", !$(".tour") && JSON.stringify(wsCalls.at(-1)) === JSON.stringify({ type: "frontend/set_user_data", key: "trimlight_local_tour", value: true }), JSON.stringify(wsCalls.at(-1)));
   page.remove();
+  tourSeen = false;
+  const fresh = makePage();
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  check("help: someone new gets the walkthrough by themselves", !!fresh.shadowRoot.querySelector(".tour"));
+  fresh.remove();
 }
 
 async function run() {

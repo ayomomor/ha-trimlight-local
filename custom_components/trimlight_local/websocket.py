@@ -53,6 +53,7 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_waiting_delete)
     websocket_api.async_register_command(hass, ws_try)
     websocket_api.async_register_command(hass, ws_hold_minutes)
+    websocket_api.async_register_command(hass, ws_hold_for)
     websocket_api.async_register_command(hass, ws_music_follow)
 
 
@@ -150,6 +151,19 @@ async def ws_try(hass: HomeAssistant, connection: websocket_api.ActiveConnection
 @websocket_api.async_response
 async def ws_hold_minutes(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     await _run_on_controller(hass, connection, msg, lambda c: c.async_set_hold_minutes(msg["minutes"]))
+
+
+@websocket_api.websocket_command(
+    {
+        vol.Required("type"): f"{DOMAIN}/hold_for",
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Exclusive("length", "end"): vol.Any("schedule", "forever", vol.In([m for m in HOLD_CHOICES if m])),
+        vol.Exclusive("until", "end"): cv.datetime,
+    }
+)
+@websocket_api.async_response
+async def ws_hold_for(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
+    await _run_on_controller(hass, connection, msg, lambda c: c.async_hold_for(msg.get("length"), msg.get("until")))
 
 
 @websocket_api.websocket_command(

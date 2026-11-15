@@ -138,9 +138,9 @@ Schedules can show saved effects and the combined effect, but not built-in effec
 Timer is the controller's normal mode: its schedules switch the lights on and off. A change made by hand is a short override, the way a thermostat holds a temperature:
 
 - **What counts**: picking an effect, a colour, a pattern or music, or turning the lights on or off, whether from the Trimlight page, Home Assistant, an automation or the Trimlight app.
-- **How long**: 1 hour, or until a schedule next switches the lights on or off if that comes sooner. Then the controller goes back to Timer. With nothing scheduled until Thanksgiving, an effect turned on at 7 pm goes off at 8 pm.
-- **Settings → Changes you make** sets the length: 30 minutes, 1, 2 or 4 hours, or until changed.
-- **On the page**: who is in charge (the schedule, you or the Trimlight app) and until when, with **Keep** to make the change last until something else is changed, and **Back to schedule**.
+- **How long**: on the Trimlight page you choose each time you tap **On** (see below). A change made anywhere else lasts 1 hour, or until a schedule next switches the lights on or off if that comes sooner. Then the controller goes back to Timer. With nothing scheduled until Thanksgiving, an effect turned on at 7 pm goes off at 8 pm.
+- **Settings → Changes from the phone app and automations** sets that length: 30 minutes, 1, 2 or 4 hours, or until changed.
+- **On the page**: the top says **On schedule** or **On**, counts down the time left while On, and says what the schedules do after that. **On schedule** hands the lights back at once.
 - **In automations**: the services `trimlight_local.keep_change` and `trimlight_local.resume_schedule`, and the light's attributes `controlled_by` (`schedule`, `you` or `app`) and `back_to_schedule_at`.
 - **Run by automations instead**: set the length to **Until changed**, and Home Assistant never switches the controller back to Timer by itself.
 
@@ -240,17 +240,18 @@ The integration adds **Trimlight** to the sidebar, a local stand-in for the phon
 
 - **At the top**:
   - a night-time roofline showing what is on the roof now, dark when the lights are off. It is approximate: the controller's own animation isn't known in detail.
-  - what is showing, who is in charge (the schedule, you or the Trimlight app) and until when.
-  - **Turn on** or **Turn off**, and while a change is in charge, **Keep** and **Back to schedule**.
-- **Patterns**: create, edit, preview and save patterns.
-  - Saved patterns are listed down the side, each with a play button that shows it on the lights. The one on the roof opens first; a pattern on the roof that isn't saved is listed as "Unsaved pattern on the roof".
+  - what is showing, and whether the lights are **On schedule** or **On**. While On, a countdown of the time left and what the schedules do after that.
+  - **On schedule** and **On**. **On** asks how long: 30 minutes, 1, 2 or 4 hours, until the schedule changes, or until you change it. It starts with the pattern or effect you picked, if any. A timed choice also ends when a schedule next switches the lights, if that comes first.
+  - **?** opens help. A short walkthrough shows the first time each Home Assistant user opens the page, and help can show it again.
+  - Leaving the page while the lights are still On, after you switched them from On schedule, asks first: back to schedule, leave them On, or stay. Closing the tab gets the browser's own question, and the browser's back button a reminder afterwards with **Back to schedule**.
+- **Patterns**: create, edit and save patterns.
+  - Saved patterns are listed down the side; nothing is picked when the page opens. Tapping one opens it. While the lights are On, it also shows on the roof straight away and your edits show live; while they are On schedule, it waits for **On**. A pattern on the roof that isn't saved is listed as "Unsaved pattern on the roof".
   - Colours are tiles, with dot counts, a palette, any custom colour, and "no colour" for unlit dots.
   - Also here: speed, brightness, lightning or snow, Save or Save as new, Rename and Delete.
-  - **Try on the lights** shows each change on the lights as you make it. When you switch it off, save, or leave the tab, the lights go back to what they were showing, schedule included.
-  - Lightning and snow belong to a saved effect, so they only show when the controller plays that effect from its memory. Turning one on plays the effect, and so does the play button. A pattern being tried is sent as a preview, which shows without its lightning or snow.
+  - Lightning and snow belong to a saved effect, so they only show when the controller plays that effect from its memory. Tapping a saved pattern plays it that way, and so does turning one on while On. Live edits are sent as a preview, which shows without its lightning or snow.
 - **Effects**: all 180 built-in effects.
   - Search, filter by motion (snake, wave, comet…) or colour, and star favourites; favourites are kept in Home Assistant.
-  - Tapping one shows it on the lights. Speed, length, brightness and direction sit beside it, and **Save** puts it in the controller's library so schedules can use it.
+  - Tapping one picks it, and shows it on the lights while they are On. Speed, length, brightness and direction sit beside it, and **Save** puts it in the controller's library so schedules can use it. The controller saves whatever is showing, so saving shows the effect; lights that were on schedule go back to it afterwards.
 - **Music**: the 18 music effects, with colour, length and sensitivity, driven by the controller's own audio (AUX) input or by a speaker playing music through Home Assistant.
 - **Schedules**:
   - Views: **Year** (12 small months, coloured like each schedule's pattern), **Month** (multi-day bars) and **List**.
@@ -260,6 +261,8 @@ The integration adds **Trimlight** to the sidebar, a local stand-in for the phon
 - **Daily**: both daily schedules, with a 24-hour bar showing when each is on.
 - **Combined effect**: the saved effects it plays in turn, the minutes each plays, and a one-cycle timeline.
 - **Settings**:
+  - **Disable the lights** turns them off and pauses the schedules, for example while you're away, until you enable them again.
+  - **Changes from the phone app and automations**: how long those last, since they can't ask.
   - **LED setup**, for when lights are added or replaced. Every change here is a trial: the lights switch to Manual, and the change is undone after a minute unless you tap **Keep**. **Undo** puts it back straight away. Either way, the effect and mode from before come back.
     - **Test colours**: red, green, blue, white, or blocks of all four, on every light.
     - **LED chip**: tap a chip type to try it. Flickering or random colours mean the chip type is wrong.

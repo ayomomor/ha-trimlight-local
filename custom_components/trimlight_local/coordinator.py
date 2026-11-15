@@ -327,11 +327,14 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         """Who runs the lights and until when, for the Trimlight page."""
         lit = self.lit_by_schedule
         until = self.back_to_schedule_at
+        moment = now()
+        windows = [] if self.data is None else sorted((w for w in self._windows_around(self.data, moment) if w.end > moment), key=lambda w: w.start)
         return {
             "lit": self.lights_lit,
             "by": self.controlled_by,
             "until": None if until is None else until.isoformat(),
             "window": None if lit is None else {"effect": self.saved_effect_name(lit.effect_id), "effect_id": lit.effect_id, "end": lit.end.isoformat()},
+            "windows": [{"start": w.start.isoformat(), "end": w.end.isoformat(), "effect": self.saved_effect_name(w.effect_id), "kind": w.kind} for w in windows],
             "hold_minutes": self.hold_minutes,
             "hold_choices": list(HOLD_CHOICES),
             "trying": self.trial is not None and self.trial.kind == "try",
@@ -415,6 +418,28 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         if data.switch_state != SwitchState.TIMER:
             self._set_hold(Hold(self.hold.by if self.hold is not None else BY_APP, None))
             self.async_update_listeners()
+
+    async def async_hold_for(self, length: int | str | None = None, until: datetime | None = None) -> None:
+        """How long the change showing now lasts: minutes, cut short if the schedules switch the lights sooner; "schedule", until they
+        next do; "forever", until something else is changed; or `until`, an end chosen earlier that a later edit must not move."""
+        data = self._require_data()
+        if data.switch_state == SwitchState.TIMER or self._suspended():
+            return
+        moment = now()
+        change = next_change(self._windows_around(data, moment), moment)
+        if until is not None:
+            end = until
+        elif length == "schedule":
+            end = change
+        elif length == "forever":
+            end = None
+        elif isinstance(length, int):
+            end = moment + timedelta(minutes=length)
+            end = end if change is None else min(end, change)
+        else:
+            raise ServiceValidationError("Say how long the change lasts: minutes, until the schedule changes, or until something else is changed")
+        self._set_hold(Hold(self.hold.by if self.hold is not None else BY_YOU, end))
+        self.async_update_listeners()
 
     async def async_set_hold_minutes(self, minutes: int | None) -> None:
         if minutes not in HOLD_CHOICES:
