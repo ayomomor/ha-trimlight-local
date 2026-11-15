@@ -45,7 +45,6 @@ const STATE = {
   sun: { sunrise: "06:40", sunset: "16:45", location_ok: true },
   builtins: BUILTINS,
   favourites: [0],
-  roofline: "two_gables",
   music: { effects: ["Full Color Rhythm Spectrum", "Single Color Rhythm Spectrum", "Full Color Rhythm Twinkle", "Single Color Rhythm Twinkle", "Gradient Energy", "Single Color Energy",
     "Gradient Pulse", "Single Color Pulse", "Full Color Ejection Forward", "Single Color Ejection Forward", "Full Color Ejection Backward", "Single Color Ejection Backward",
     "Full Color VuMeter", "Single Color VuMeter", "Independence Day", "Christmas", "HeatBeat", "Party"], source: "aux", color: "#ff0000", length: 70, sensitivity: 13 },
@@ -110,10 +109,6 @@ const hass = {
   },
   entities: Object.fromEntries(["light.porch", "select.porch_mode", "calendar.porch_schedules"].map((id) => [id, { entity_id: id, platform: "trimlight_local", device_id: "dev1" }])),
   callWS: async (msg) => {
-    if (msg.type === "trimlight_local/roofline") {
-      wsCalls.push(msg);
-      return { roofline: msg.roofline };
-    }
     if (msg.type === "trimlight_local/favourites") {
       wsCalls.push(msg);
       return { favourites: msg.favourites };
@@ -589,10 +584,6 @@ async function testPage() {
   act("rename-controller").click();
   await tick();
   check("settings: Rename sends the trimmed name", sent(1) === '[["rename",{"name":"Roofline"}]]' && $('[data-in="ctl-name"]').value === "Roofline" && act("rename-controller").disabled, sent(1));
-  check("settings: the roofline picture shows the chosen house", act("roofline", "two_gables").getAttribute("aria-pressed") === "true");
-  act("roofline", "house").click();
-  await tick();
-  check("settings: picking a roofline saves it in Home Assistant", JSON.stringify(wsCalls.at(-1)) === JSON.stringify({ type: "trimlight_local/roofline", entity_id: "light.porch", roofline: "house" }) && act("roofline", "house").getAttribute("aria-pressed") === "true");
   page.remove();
 }
 

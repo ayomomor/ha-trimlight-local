@@ -14,7 +14,7 @@ from homeassistant.util import dt as dt_util
 
 from homeassistant.const import SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET
 
-from .const import COMBINED_EFFECT_NAME, DOMAIN, MUSIC_EFFECTS, PATTERN_MODES, REPEATS, ROOFLINES
+from .const import COMBINED_EFFECT_NAME, DOMAIN, MUSIC_EFFECTS, PATTERN_MODES, REPEATS
 from .control import HOLD_CHOICES
 from .music import DELAY_RANGE_MS
 from .coordinator import TrimlightCoordinator, writable_from
@@ -46,7 +46,6 @@ _REPEAT_KEYS = {value: key for key, value in REPEATS.items()}
 def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_state)
     websocket_api.async_register_command(hass, ws_favourites)
-    websocket_api.async_register_command(hass, ws_roofline)
     websocket_api.async_register_command(hass, ws_led_test)
     websocket_api.async_register_command(hass, ws_led_setup)
     websocket_api.async_register_command(hass, ws_led_session_end)
@@ -82,17 +81,6 @@ async def ws_favourites(hass: HomeAssistant, connection: websocket_api.ActiveCon
         return
     await found.runtime_data.async_set_favourites(msg["favourites"])
     connection.send_result(msg["id"], {"favourites": found.runtime_data.favourites})
-
-
-@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/roofline", vol.Required("entity_id"): cv.entity_id, vol.Required("roofline"): vol.In(ROOFLINES)})
-@websocket_api.async_response
-async def ws_roofline(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
-    found = _entry(hass, msg["entity_id"])
-    if found is None:
-        connection.send_error(msg["id"], websocket_api.ERR_NOT_FOUND, f"{msg['entity_id']} is not a Trimlight light that is set up")
-        return
-    await found.runtime_data.async_set_roofline(msg["roofline"])
-    connection.send_result(msg["id"], {"roofline": found.runtime_data.roofline})
 
 
 async def _run_on_controller(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any], action: Any) -> None:
@@ -209,7 +197,6 @@ def describe(coordinator: TrimlightCoordinator, entity_ids: dict[str, str]) -> d
         "combined_name": COMBINED_EFFECT_NAME,
         "builtins": list(BUILTIN_EFFECTS),
         "favourites": coordinator.favourites,
-        "roofline": coordinator.roofline,
         "music": _music(data.music),
         "device": _device(coordinator),
         "limits": {"colors": SEGMENT_COUNT, "dots": MAX_SEGMENT_DOTS, "name": LIBRARY_NAME_LEN},

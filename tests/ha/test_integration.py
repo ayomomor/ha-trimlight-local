@@ -872,13 +872,9 @@ async def test_show_effect_music_and_favourites(hass: HomeAssistant, controller,
     assert not (await ws.receive_json())["success"]
     await ws.send_json({"id": 4, "type": f"{DOMAIN}/state", "entity_id": LIGHT})
     state = (await ws.receive_json())["result"]
-    assert (state["favourites"], state["roofline"]) == ([3, 0], "house")
-    await ws.send_json({"id": 5, "type": f"{DOMAIN}/roofline", "entity_id": LIGHT, "roofline": "two_gables"})
-    assert (await ws.receive_json())["result"] == {"roofline": "two_gables"}
-    await ws.send_json({"id": 6, "type": f"{DOMAIN}/roofline", "entity_id": LIGHT, "roofline": "castle"})
-    assert not (await ws.receive_json())["success"]
+    assert state["favourites"] == [3, 0]
     stored = await entry.runtime_data._page_store.async_load()
-    assert (stored["favourites"], stored["roofline"], stored["hold_minutes"]) == ([3, 0], "two_gables", 60)
+    assert (stored["favourites"], stored["hold_minutes"]) == ([3, 0], 60)
 
     with pytest.raises(INVALID):
         await call(hass, "show_effect", {ATTR_EFFECT: "Not an effect"})

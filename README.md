@@ -266,7 +266,6 @@ The integration adds **Trimlight** to the sidebar, a local stand-in for the phon
     - **Colour order**: tap one to try it, or use **Find the right order**: it shows red, then green, and asks what colour you see each time. It works out the order from your two answers, then asks you to check it.
     - **Ports**: each output's first and last dot, and whether it is used. **Try** sends all four.
   - **Controller**: rename it (the name the phone app shows), plus its address, firmware and clock.
-  - **Roofline picture** for the preview: a simple house, or two gables with a porch. The choice is kept in Home Assistant for each controller.
 
 With more than one controller, a picker appears in the header. On a phone, the menu button at the top left opens the sidebar.
 

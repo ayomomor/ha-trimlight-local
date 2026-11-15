@@ -18,7 +18,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.util import dt as dt_util
 
-from .const import COMBINED_EFFECT_NAME, CONF_DEVICE_CODE, DEFAULT_PIXEL_LEN, DEFAULT_SPEED, DOMAIN, ROOFLINES, SCAN_INTERVAL
+from .const import COMBINED_EFFECT_NAME, CONF_DEVICE_CODE, DEFAULT_PIXEL_LEN, DEFAULT_SPEED, DOMAIN, SCAN_INTERVAL
 from .control import BY_APP, BY_SCHEDULE, BY_YOU, DEFAULT_HOLD_MINUTES, HOLD_CHOICES, Hold, Window, lit_window, next_change
 from .effects import BUILTIN_EFFECTS
 from .music import FollowSettings, MusicFollower
@@ -138,7 +138,6 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         self.holiday_dates = HolidayDates()
         self._page_store: Store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.page")
         self.favourites: list[int] = []
-        self.roofline = ROOFLINES[0]
         self.led_session: LedSession | None = None
         self.trial: Trial | None = None
         self.hold: Hold | None = None
@@ -154,8 +153,6 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         await self.holiday_dates.async_load(self.hass, now().date())
         page = await self._page_store.async_load() or {}
         self.favourites = list(page.get("favourites", []))
-        if page.get("roofline") in ROOFLINES:
-            self.roofline = page["roofline"]
         if page.get("hold_minutes", DEFAULT_HOLD_MINUTES) in HOLD_CHOICES:
             self.hold_minutes = page.get("hold_minutes", DEFAULT_HOLD_MINUTES)
         self.hold = Hold.from_dict(page.get("hold"))
@@ -166,18 +163,12 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         self.favourites = list(dict.fromkeys(favourites))
         await self._save_page()
 
-    async def async_set_roofline(self, roofline: str) -> None:
-        """The house drawing the Trimlight page previews the lights on."""
-        self.roofline = roofline
-        await self._save_page()
-
     async def _save_page(self) -> None:
         await self._page_store.async_save(self._page_data())
 
     def _page_data(self) -> dict:
         return {
             "favourites": self.favourites,
-            "roofline": self.roofline,
             "hold_minutes": self.hold_minutes,
             "hold": None if self.hold is None else self.hold.as_dict(),
             "music": {**dataclasses.asdict(self.music.settings), "color": list(self.music.settings.color)},

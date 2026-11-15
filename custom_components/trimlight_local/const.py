@@ -42,8 +42,6 @@ PATTERN_MODES = {name.lower().replace(" ", "_"): index for index, name in enumer
 REPEATS = {"today_only": Repeat.TODAY_ONLY, "every_day": Repeat.EVERY_DAY, "weekdays": Repeat.WEEKDAYS, "weekend": Repeat.WEEKEND}
 
 PANEL_URL_PATH = "trimlight"
-# The house drawings the Trimlight page can show its preview on; the page holds the shapes.
-ROOFLINES = ("house", "two_gables")
 
 # Shown for the combined effect wherever a saved effect can be picked for a schedule.
 COMBINED_EFFECT_NAME = "Combined effect"

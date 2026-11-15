@@ -624,33 +624,25 @@ function ledColour(look, i, t, n) {
 }
 
 /*
- * House drawings for the preview, in fractions of their own width and height. A shape with an aspect ratio keeps its
- * proportions and stands centred on the ground; one without stretches across the preview. Runs are where the lights go.
+ * The house drawing for the preview, in fractions of its own width and height. On a wide preview only the part between
+ * the stretch marks widens, so the gables keep their shape. Runs are where the lights go.
  */
-const ROOFLINES = {
-  house: {
-    name: "Simple house",
-    ground: 0.88,
-    outline: [[0.1, 0.88], [0.1, 0.52], [0.27, 0.2], [0.42, 0.52], [0.6, 0.52], [0.75, 0.3], [0.9, 0.52], [0.9, 0.88]],
-    windows: [[0.2, 0.6, 0.05, 0.12], [0.31, 0.6, 0.05, 0.12], [0.66, 0.62, 0.05, 0.12], [0.79, 0.62, 0.05, 0.12]],
-    runs: [[[0.1, 0.52], [0.27, 0.2], [0.42, 0.52], [0.6, 0.52], [0.75, 0.3], [0.9, 0.52]]],
-  },
-  two_gables: {
-    name: "Two gables with a porch",
-    aspect: 2.23,
-    outline: [[0.017, 1], [0.017, 0.962], [0.03, 0.86], [0.075, 0.86], [0.075, 0.56], [0.05, 0.545], [0.146, 0.29], [0.31, 0.18], [0.346, 0.155],
-      [0.42, 0.27], [0.833, 0.27], [0.98, 0.53], [0.965, 0.54], [0.958, 0.98], [0.958, 1]],
-    roofs: [[[0.017, 0.962], [0.03, 0.86], [0.726, 0.86], [0.726, 0.962]], [[0.42, 0.27], [0.833, 0.27], [0.98, 0.53], [0.648, 0.54], [0.556, 0.54], [0.558, 0.478]]],
-    windows: [[0.287, 0.548, 0.13, 0.256], [0.126, 0.62, 0.035, 0.13], [0.749, 0.73, 0.12, 0.11]],
-    runs: [
-      [[0.055, 0.535], [0.346, 0.155], [0.558, 0.478], [0.556, 0.54], [0.648, 0.54], [0.809, 0.289], [0.975, 0.533]],
-      [[0.017, 0.962], [0.726, 0.962]],
-    ],
-  },
+const ROOFLINE = {
+  aspect: 2.23,
+  stretch: [0.57, 0.64],
+  widest: 2,
+  outline: [[0.017, 1], [0.017, 0.962], [0.03, 0.86], [0.075, 0.86], [0.075, 0.56], [0.05, 0.545], [0.146, 0.29], [0.31, 0.18], [0.346, 0.155],
+    [0.42, 0.27], [0.833, 0.27], [0.98, 0.53], [0.965, 0.54], [0.958, 0.98], [0.958, 1]],
+  roofs: [[[0.017, 0.962], [0.03, 0.86], [0.726, 0.86], [0.726, 0.962]], [[0.42, 0.27], [0.833, 0.27], [0.98, 0.53], [0.648, 0.54], [0.556, 0.54], [0.558, 0.478]]],
+  windows: [[0.287, 0.548, 0.13, 0.256], [0.126, 0.62, 0.035, 0.13], [0.749, 0.73, 0.12, 0.11]],
+  runs: [
+    [[0.055, 0.535], [0.346, 0.155], [0.558, 0.478], [0.556, 0.54], [0.648, 0.54], [0.809, 0.289], [0.975, 0.533]],
+    [[0.017, 0.962], [0.726, 0.962]],
+  ],
 };
 const LED_SPACING = 10;
 
-function drawRoofline(canvas, look, t, shapeName) {
+function drawRoofline(canvas, look, t) {
   const rect = canvas.getBoundingClientRect();
   if (!rect.width) return;
   const dpr = window.devicePixelRatio || 1;
@@ -661,7 +653,7 @@ function drawRoofline(canvas, look, t, shapeName) {
   const ctx = canvas.getContext("2d");
   const w = rect.width;
   const h = rect.height;
-  const shape = ROOFLINES[shapeName] || ROOFLINES.house;
+  const shape = ROOFLINE;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const sky = ctx.createLinearGradient(0, 0, 0, h);
   sky.addColorStop(0, "#050813");
@@ -672,18 +664,15 @@ function drawRoofline(canvas, look, t, shapeName) {
     ctx.fillStyle = `rgba(220,230,255,${0.25 + 0.15 * (s % 3)})`;
     ctx.fillRect((Math.sin(s * 91.7) * 0.5 + 0.5) * w, (Math.sin(s * 47.3) * 0.5 + 0.5) * 0.45 * h, 1 + (s % 3) * 0.6, 1 + (s % 3) * 0.6);
   }
-  let left = 0;
-  let top = 0;
-  let width = w;
-  let height = h;
-  if (shape.aspect) {
-    height = Math.min(h * 0.86, (w * 0.94) / shape.aspect);
-    width = height * shape.aspect;
-    left = (w - width) / 2;
-    top = h * 0.95 - height;
-  }
-  const at = ([x, y]) => [left + x * width, top + y * height];
-  const ground = shape.aspect ? top + height : h * shape.ground;
+  const height = Math.min(h * 0.86, (w * 0.94) / shape.aspect);
+  const natural = height * shape.aspect;
+  const extra = Math.min(w * 0.94 - natural, natural * (shape.widest - 1));
+  const left = (w - natural - extra) / 2;
+  const top = h * 0.95 - height;
+  const [from, to] = shape.stretch;
+  const sx = (x) => left + x * natural + extra * Math.min(1, Math.max(0, (x - from) / (to - from)));
+  const at = ([x, y]) => [sx(x), top + y * height];
+  const ground = top + height;
   ctx.fillStyle = "#0b1122";
   ctx.fillRect(0, ground, w, h - ground);
   const fill = (points, colour) => {
@@ -694,9 +683,9 @@ function drawRoofline(canvas, look, t, shapeName) {
     ctx.fill();
   };
   fill(shape.outline, "#04060d");
-  (shape.roofs || []).forEach((roof) => fill(roof, "#070a14"));
+  shape.roofs.forEach((roof) => fill(roof, "#070a14"));
   ctx.fillStyle = "rgba(255,190,110,0.16)";
-  shape.windows.forEach(([x, y, ww, wh]) => ctx.fillRect(left + x * width, top + y * height, ww * width, wh * height));
+  shape.windows.forEach(([x, y, ww, wh]) => ctx.fillRect(sx(x), top + y * height, sx(x + ww) - sx(x), wh * height));
   const points = [];
   shape.runs.forEach((run) => {
     const corners = run.map(at);
@@ -1060,7 +1049,7 @@ class TrimlightPanel extends HTMLElement {
     if (!this._animate) return;
     if (this._canvas && this._data && !document.hidden && this.offsetParent !== null) {
       const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      drawRoofline(this._canvas, this._previewLook(), reduce ? 0 : time / 100, this._data.roofline);
+      drawRoofline(this._canvas, this._previewLook(), reduce ? 0 : time / 100);
     }
     requestAnimationFrame((t) => this._frame(t));
   }
@@ -1745,8 +1734,6 @@ class TrimlightPanel extends HTMLElement {
           <dl class="facts">${fact("Address", device.host)}${fact("Firmware", device.firmware)}${fact("MCU firmware", device.mcu_version)}${fact("Controller clock", device.clock ? device.clock.replace("T", " ") : null)}${fact("Clock sync", device.time_sync === "auto" ? "Automatic: Home Assistant sets it on every update" : device.time_sync === "manual" ? "Manual" : null)}</dl></div>
         <div class="card"><h2>Changes you make</h2><p class="sub">Timer is the controller's normal mode: its schedules run the lights. A change made here, in Home Assistant or in the Trimlight app lasts this long, or until a schedule next switches the lights on or off if that's sooner. Then the controller goes back to Timer.</p>
           <div class="seg" role="group" aria-label="Changes last">${(this._data.control.hold_choices || []).map((m) => `<button type="button" data-act="hold" data-key="${m ?? "keep"}" aria-pressed="${this._data.control.hold_minutes === m}">${holdLabel(m)}</button>`).join("")}</div></div>
-        <div class="card"><h2>Roofline picture</h2><p class="sub">The house the preview at the top lights up.</p>
-          <div class="seg" role="group" aria-label="Roofline picture">${Object.entries(ROOFLINES).map(([key, shape]) => `<button type="button" data-act="roofline" data-key="${key}" aria-pressed="${this._data.roofline === key}">${esc(shape.name)}</button>`).join("")}</div></div>
       </div>`;
   }
 
@@ -1925,10 +1912,6 @@ class TrimlightPanel extends HTMLElement {
       case "music": s.music = Number(key); if (data.control.music.on && (s.musicSource || "ha") === "ha") this._sendFollow(this._musicLook()); break;
       case "music-source": s.musicSource = key; break;
       case "follow": this._sendFollow({ ...this._musicLook(), on: key === "on" }); return;
-      case "roofline":
-        data.roofline = key;
-        this._hass.callWS({ type: `${DOMAIN}/roofline`, entity_id: this._entity, roofline: key }).catch((err) => this._toast(err.message || String(err), true));
-        break;
       case "start-music": {
         const effect = data.music.effects[s.music];
         const fields = { effect, length: s.musicLength, sensitivity: s.musicSens };
