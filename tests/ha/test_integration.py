@@ -556,21 +556,20 @@ async def test_page_data_and_file(hass: HomeAssistant, controller, hass_ws_clien
     response = await (await hass_client()).get("/trimlight_local/trimlight-ui.js")
     assert response.status == 200
     text = await response.text()
-    assert '"trimlight-panel": TrimlightPanel' in text and '"trimlight-pattern-card": TrimlightPatternCard' in text
+    assert 'customElements.define("trimlight-panel", TrimlightPanel)' in text and "trimlight-pattern-card" not in text
 
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
 
-async def test_sidebar_page_and_card_are_registered(hass: HomeAssistant, controller) -> None:
+async def test_sidebar_page_is_registered(hass: HomeAssistant, controller) -> None:
     use_fixture(controller, "sync_reply.hex")
     hass.config.components.add("frontend")
-    with patch("custom_components.trimlight_local.add_extra_js_url") as add_js, patch("custom_components.trimlight_local.panel_custom.async_register_panel") as register:
+    with patch("custom_components.trimlight_local.panel_custom.async_register_panel") as register:
         entry = await setup_entry(hass)
-    [(_, module_url)] = [c.args for c in add_js.call_args_list]
-    assert module_url.startswith("/trimlight_local/trimlight-ui.js?v=")
     kwargs = register.call_args.kwargs
-    assert (kwargs["frontend_url_path"], kwargs["webcomponent_name"], kwargs["sidebar_title"], kwargs["module_url"]) == ("trimlight", "trimlight-panel", "Trimlight", module_url)
+    assert (kwargs["frontend_url_path"], kwargs["webcomponent_name"], kwargs["sidebar_title"]) == ("trimlight", "trimlight-panel", "Trimlight")
+    assert kwargs["module_url"].startswith("/trimlight_local/trimlight-ui.js?v=")
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
@@ -1004,7 +1003,7 @@ async def test_a_change_lasts_an_hour_then_the_schedules_take_over(hass: HomeAss
     with patch(NOW, return_value=local(2026, 11, 25, 15, 30)):
         await hass.services.async_call(LIGHT_DOMAIN, "turn_on", {ATTR_ENTITY_ID: LIGHT, ATTR_EFFECT: "Rainbow Wave"}, blocking=True)
         await settle(hass)
-    assert hass.states.get(LIGHT).attributes["back_to_schedule_at"] == local(2026, 11, 25, 16, 27).isoformat()
+    assert hass.states.get(LIGHT).attributes["back_to_schedule_at"] == local(2026, 11, 25, 16, 30).isoformat()
 
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
@@ -1035,7 +1034,7 @@ async def test_changes_made_in_the_app_are_held_too(hass: HomeAssistant, control
     await hass.async_block_till_done()
 
 
-async def test_hold_length_and_trying_patterns(hass: HomeAssistant, controller, hass_ws_client) -> None:
+async def test_hold_length(hass: HomeAssistant, controller, hass_ws_client) -> None:
     use_fixture(controller, "sync_reply.hex")
     controller.switch_state = 2
     moment = local(2026, 8, 12, 19, 0)
@@ -1059,15 +1058,15 @@ async def test_hold_length_and_trying_patterns(hass: HomeAssistant, controller, 
     await call(hass, "resume_schedule", {})
     assert controller.switch_state == 2
 
-    assert (await send(4, type="trimlight_local/try", on=True))["success"]
-    await call(hass, "show_pattern", {"mode": "static", "colors": ["red", "white"]})
-    state = hass.states.get(LIGHT)
-    assert controller.switch_state == 1 and coordinator.hold is None
-    assert (state.attributes["controlled_by"], state.attributes["back_to_schedule_at"]) == ("you", None)
-    assert (await send(5, type="trimlight_local/state"))["result"]["control"]["trying"] is True
-    assert (await send(6, type="trimlight_local/try", on=False))["success"]
-    await settle(hass)
-    assert controller.switch_state == 2 and coordinator.hold is None and coordinator.trial is None
+    assert not (await send(4, type="trimlight_local/try", on=True))["success"]
+    assert "trying" not in (await send(5, type="trimlight_local/state"))["result"]["control"]
+    with patch(NOW, return_value=moment):
+        await call(hass, "show_pattern", {"mode": "static", "colors": ["red", "white"]})
+        assert controller.switch_state == 1 and coordinator.trial is None
+        assert coordinator.hold.until == moment + timedelta(hours=2)
+        await call(hass, "resume_schedule", {})
+        await settle(hass)
+    assert controller.switch_state == 2
 
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
@@ -1097,7 +1096,7 @@ async def test_the_page_sets_how_long_a_change_lasts(hass: HomeAssistant, contro
         for msg_id, fields in enumerate(({"length": 30}, {"length": 120}, {"length": "schedule"}, {"length": "forever"}, {"until": local(2026, 11, 25, 15, 45).isoformat()}), start=2):
             assert (await hold(msg_id, **fields))["success"]
             ends.append(coordinator.hold.until)
-        assert ends == [moment + timedelta(minutes=30), switch, switch, None, local(2026, 11, 25, 15, 45)]
+        assert ends == [moment + timedelta(minutes=30), moment + timedelta(minutes=120), switch, None, local(2026, 11, 25, 15, 45)]
         assert hass.states.get(LIGHT).attributes["back_to_schedule_at"] == local(2026, 11, 25, 15, 45).isoformat()
         assert not (await hold(7))["success"]
         assert not (await hold(8, length=45))["success"]

@@ -72,8 +72,6 @@ LED_TEST_PATTERN = encode_segments([(10, (255, 0, 0)), (10, (0, 255, 0)), (10, (
 _SCHEDULE_YEAR = 2016
 # The daily schedule update is tried again this much later when another app had the controller.
 BUSY_REFRESH_RETRY = timedelta(minutes=10)
-# Patterns tried on the lights are taken off after this long without a change, in case the page was closed while trying.
-TRIAL_SECONDS = 600
 HOLD_RETRY = timedelta(minutes=1)
 # While the controller can't be reached, it is looked for at a new address at most this often.
 FIND_MOVED_EVERY = timedelta(minutes=5)
@@ -102,13 +100,11 @@ class LedSession:
 
 @dataclass
 class Trial:
-    """Patterns tried on the lights from the page, or music followed from a speaker: what to put back when it ends."""
+    """Music followed from a speaker: what to put back when it ends."""
 
     switch_state: int
     effect: CurrentEffect | None
     hold: Hold | None
-    kind: str = "try"
-    cancel: CALLBACK_TYPE | None = None
 
 
 @dataclass(frozen=True)
@@ -313,7 +309,7 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         if data.switch_state == SwitchState.TIMER:
             return BY_SCHEDULE
         if self.trial is not None:
-            return "music" if self.trial.kind == "music" else BY_YOU
+            return "music"
         return self.hold.by if self.hold is not None else BY_APP
 
     @property
@@ -337,7 +333,6 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
             "windows": [{"start": w.start.isoformat(), "end": w.end.isoformat(), "effect": self.saved_effect_name(w.effect_id), "kind": w.kind} for w in windows],
             "hold_minutes": self.hold_minutes,
             "hold_choices": list(HOLD_CHOICES),
-            "trying": self.trial is not None and self.trial.kind == "try",
             "music": self.music.summary(),
         }
 
@@ -345,14 +340,9 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         """An LED test or a pattern being tried on the lights puts things back itself, so it starts no hold."""
         return self.trial is not None or self.led_session is not None
 
-    def _new_hold(self, by: str, state: SyncState) -> Hold:
-        """A change lasts `hold_minutes`, or until the schedules next switch the lights on or off if that is sooner."""
-        if self.hold_minutes is None:
-            return Hold(by, None)
-        moment = now()
-        until = moment + timedelta(minutes=self.hold_minutes)
-        change = next_change(self._windows_around(state, moment), moment)
-        return Hold(by, until if change is None else min(until, change))
+    def _new_hold(self, by: str) -> Hold:
+        """A change lasts `hold_minutes`, even past the schedules' own switch times; None lasts until something else is changed."""
+        return Hold(by, None if self.hold_minutes is None else now() + timedelta(minutes=self.hold_minutes))
 
     def _set_hold(self, hold: Hold | None) -> None:
         if self._hold_timer is not None:
@@ -366,17 +356,15 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
             self._page_store.async_delay_save(self._page_data, 1)
 
     def _note_change(self, switch_state: int) -> None:
-        if self.trial is not None and self.trial.kind == "music":
+        if self.trial is not None:
             self.trial = None
             self.music.user_took_over()
         if self._suspended():
-            if self.trial is not None:
-                self._restart_trial_timer()
             return
         if switch_state == SwitchState.TIMER:
             self._set_hold(None)
         elif self.data is not None:
-            self._set_hold(self._new_hold(BY_YOU, self.data))
+            self._set_hold(self._new_hold(BY_YOU))
 
     def _check_hold(self, state: SyncState) -> None:
         """Follow mode changes made elsewhere: leaving timer mode starts a hold, and an ended hold returns to it."""
@@ -386,7 +374,7 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
             if self.hold is not None:
                 self._set_hold(None)
         elif self.hold is None:
-            self._set_hold(self._new_hold(BY_APP, state))
+            self._set_hold(self._new_hold(BY_APP))
         elif self.hold.until is not None and self._hold_timer is None:
             if self.hold.until <= now():
                 self._hold_ended(dt_util.utcnow())
@@ -420,8 +408,8 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
             self.async_update_listeners()
 
     async def async_hold_for(self, length: int | str | None = None, until: datetime | None = None) -> None:
-        """How long the change showing now lasts: minutes, cut short if the schedules switch the lights sooner; "schedule", until they
-        next do; "forever", until something else is changed; or `until`, an end chosen earlier that a later edit must not move."""
+        """How long the change showing now lasts: minutes, even past the schedules' own switch times; "schedule", until they next
+        switch the lights; "forever", until something else is changed; or `until`, an end chosen earlier that a later edit must not move."""
         data = self._require_data()
         if data.switch_state == SwitchState.TIMER or self._suspended():
             return
@@ -435,7 +423,6 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
             end = None
         elif isinstance(length, int):
             end = moment + timedelta(minutes=length)
-            end = end if change is None else min(end, change)
         else:
             raise ServiceValidationError("Say how long the change lasts: minutes, until the schedule changes, or until something else is changed")
         self._set_hold(Hold(self.hold.by if self.hold is not None else BY_YOU, end))
@@ -448,61 +435,27 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         await self._save_page()
         self.async_update_listeners()
 
-    async def async_try(self, on: bool) -> None:
-        """Start or end trying patterns on the lights; at the end, what showed before is put back."""
-        if not on:
-            await self._async_end_trial()
-            return
-        if self.trial is None:
-            data = self._require_data()
-            self.trial = Trial(data.switch_state, data.current_effect, self.hold)
-        elif self.trial.kind == "music":
-            self.trial.kind = "try"
-            self.music.user_took_over()
-        self._restart_trial_timer()
-        self.async_update_listeners()
-
-    def _restart_trial_timer(self) -> None:
-        if (trial := self.trial) is None or trial.kind != "try":
-            return
-        if trial.cancel:
-            trial.cancel()
-        trial.cancel = async_call_later(self.hass, TRIAL_SECONDS, HassJob(self._trial_expired, cancel_on_shutdown=True))
-
     async def async_begin_music(self, settings: FollowSettings) -> None:
         """Put the lights on the music effect for streamed bands, remembering what they showed so the end of the music puts it back."""
         data = self._require_data()
         if self.trial is None:
-            self.trial = Trial(data.switch_state, data.current_effect, self.hold, kind="music")
-        elif self.trial.kind != "music":
-            if self.trial.cancel:
-                self.trial.cancel()
-            self.trial.cancel = None
-            self.trial.kind = "music"
+            self.trial = Trial(data.switch_state, data.current_effect, self.hold)
         if data.switch_state != SwitchState.MANUAL:
             await _run(self.client.set_switch_state(SwitchState.MANUAL))
         await _run(self.client.set_music(settings.effect, settings.color, settings.length, settings.sensitivity, MusicSource.PHONE_PLAYER))
         self.async_set_updated_data(dataclasses.replace(data, switch_state=SwitchState.MANUAL, current_effect=CurrentEffect(CATEGORY_MUSIC, settings.effect, 0, 0, 0, False, b"")))
 
     async def async_end_music(self, *, restore: bool) -> None:
-        if self.trial is None or self.trial.kind != "music":
+        if self.trial is None:
             return
         if restore:
             await self._async_end_trial()
         else:
             self.trial = None
 
-    @callback
-    def _trial_expired(self, _: datetime) -> None:
-        if self.trial is not None:
-            self.trial.cancel = None
-            self.config_entry.async_create_background_task(self.hass, self._async_end_trial(), "trimlight_local end trying")
-
     async def _async_end_trial(self) -> None:
         if (trial := self.trial) is None:
             return
-        if trial.cancel:
-            trial.cancel()
         self.trial = None
         try:
             data = self.data
@@ -891,9 +844,6 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         if self._hold_timer is not None:
             self._hold_timer()
             self._hold_timer = None
-        if self.trial is not None and self.trial.cancel is not None:
-            self.trial.cancel()
-            self.trial.cancel = None
         self.music.async_shutdown()
 
     async def async_refresh_holiday_dates(self) -> None:

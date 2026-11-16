@@ -2,6 +2,8 @@
 
 Controls a Trimlight Edge controller over your LAN, with no cloud account and no internet. The protocol is described in [PROTOCOL.md](PROTOCOL.md). It is not made by or affiliated with Trimlight.
 
+This integration was written by Claude, an AI model made by Anthropic, under my supervision.
+
 **Status:** tested on a real controller (2026-11-08): on/off/timer, built-in effects, solid colour, saved effects and brightness changes all work, and so does reading the state back.
 
 ## 1. Test against your controller
@@ -85,7 +87,6 @@ Tested with Home Assistant 2026.10 and 2026.11.
   - `show_saved_effect`: shows a saved effect by its slot number (`effect_id`).
 - **Follow music** switch and **Music delay** setting: see [Music played through Home Assistant](#music-played-through-home-assistant).
 - **Actions on the calendar**: `set_schedule` adds a schedule, or changes one when given its `schedule_id`; `delete_schedule` deletes one.
-- **Pattern editor card** for your dashboards, like the app's pattern editor. See below.
 - **Light attributes**:
   - `overlays`: which saved effects have lightning or snow;
   - `combined_effect` and `combined_effect_interval`: the combined effect's contents and timing.
@@ -138,7 +139,7 @@ Schedules can show saved effects and the combined effect, but not built-in effec
 Timer is the controller's normal mode: its schedules switch the lights on and off. A change made by hand is a short override, the way a thermostat holds a temperature:
 
 - **What counts**: picking an effect, a colour, a pattern or music, or turning the lights on or off, whether from the Trimlight page, Home Assistant, an automation or the Trimlight app.
-- **How long**: on the Trimlight page you choose each time you tap **On** (see below). A change made anywhere else lasts 1 hour, or until a schedule next switches the lights on or off if that comes sooner. Then the controller goes back to Timer. With nothing scheduled until Thanksgiving, an effect turned on at 7 pm goes off at 8 pm.
+- **How long**: on the Trimlight page you choose each time you tap **On** (see below). A change made anywhere else lasts 1 hour. Then the controller goes back to Timer, and the lights do whatever the schedules say at that moment. A schedule's own on or off time that falls inside the change is skipped: an effect turned on at 10 pm, with a schedule that switches off at 10:30 pm, stays on until 11 pm and then goes off.
 - **Settings → Changes from the phone app and automations** sets that length: 30 minutes, 1, 2 or 4 hours, or until changed.
 - **On the page**: the top says **On schedule** or **On**, counts down the time left while On, and says what the schedules do after that. **On schedule** hands the lights back at once.
 - **In automations**: the services `trimlight_local.keep_change` and `trimlight_local.resume_schedule`, and the light's attributes `controlled_by` (`schedule`, `you` or `app`) and `back_to_schedule_at`.
@@ -241,7 +242,7 @@ The integration adds **Trimlight** to the sidebar, a local stand-in for the phon
 - **At the top**:
   - a night-time roofline showing what is on the roof now, dark when the lights are off. It is approximate: the controller's own animation isn't known in detail.
   - what is showing, and whether the lights are **On schedule** or **On**. While On, a countdown of the time left and what the schedules do after that.
-  - **On schedule** and **On**. **On** asks how long: 30 minutes, 1, 2 or 4 hours, until the schedule changes, or until you change it. It starts with the pattern or effect you picked, if any. A timed choice also ends when a schedule next switches the lights, if that comes first.
+  - **On schedule** and **On**. **On** asks how long: 30 minutes, 1, 2 or 4 hours, until the schedule changes, or until you change it. It starts with the pattern or effect you picked, if any. A timed choice runs its full length, even past a schedule's own on or off time.
   - **?** opens help. A short walkthrough shows the first time each Home Assistant user opens the page, and help can show it again.
   - Leaving the page while the lights are still On, after you switched them from On schedule, asks first: back to schedule, leave them On, or stay. Closing the tab gets the browser's own question, and the browser's back button a reminder afterwards with **Back to schedule**.
 - **Patterns**: create, edit and save patterns.
@@ -272,41 +273,15 @@ The integration adds **Trimlight** to the sidebar, a local stand-in for the phon
 
 With more than one controller, a picker appears in the header. On a phone, the menu button at the top left opens the sidebar.
 
-## Pattern editor card
+## Example dashboard
 
-The integration installs a dashboard card for creating and editing patterns; there is nothing else to install.
-
-Recent Home Assistant versions start with an auto-generated dashboard (Home, Areas). It only takes extra cards after **Take control**, which stops it updating itself. A separate Trimlight dashboard is easier, and it gets its own place in the sidebar:
+The Trimlight page does everything above. If you'd also like the light and the schedules on a dashboard, a separate Trimlight dashboard is easiest, and it gets its own place in the sidebar. (Recent Home Assistant versions start with an auto-generated dashboard, Home and Areas, which only takes extra cards after **Take control**, and that stops it updating itself.)
 
 1. Go to **Settings → Dashboards → Add dashboard → New dashboard from scratch**.
 2. Title it "Trimlight" and tick **Add to sidebar**.
 3. Open it. To get the ready-made layout, choose **pencil → ⋮ → Raw configuration editor** and replace everything with [dashboard.yaml](dashboard.yaml). That layout has:
    - the light, Mode and effect controls;
-   - the pattern editor;
    - the schedules calendar and both daily schedules.
-4. Or choose **Add card** and search for **Trimlight pattern editor**.
-
-Or add a manual card:
-
-```yaml
-type: custom:trimlight-pattern-card
-entity: light.roofline
-```
-
-In the card:
-
-- **Edit** picks what to work on:
-  - a new pattern;
-  - what the lights show now;
-  - one of your saved patterns. Saved built-in effects are listed but can't be edited here; change them with the light's controls and Save effect.
-- **Colours**: click a row, then a swatch. Or use the row's own colour picker. The crossed-out swatch is "no colour", which leaves those dots unlit.
-  - Set how many dots each colour covers, reorder colours with the arrows, and add up to 30.
-  - The strip above shows how the colours repeat along the lights. It doesn't animate the mode.
-- **Speed**, **Brightness**, and **Overlay** (lightning or snow, for saved patterns).
-- **Show on lights** previews the pattern without saving it. With **Live preview** ticked, every change shows on the lights after a short pause.
-- **Save** stores the pattern under the name shown. Change the name and the button becomes **Save as new**; the original stays.
-- **Rename** renames the saved pattern to the name shown.
-- **Delete** removes it from the controller. It is greyed out while a schedule or the combined effect uses the pattern.
 
 ## Limitations
 
@@ -349,7 +324,6 @@ logger:
 
 - **Client and protocol**: `python -m unittest discover -s tests` (no dependencies).
 - **Home Assistant integration**: `pip install pytest-homeassistant-custom-component holidays numpy`, then `pytest` from this folder. Run the client tests separately: Home Assistant's test plugin blocks the local socket they use.
-- **Page and card**: open `tests/card/harness.html#test` in a browser. It clicks through the card and every tab of the page against a simulated Home Assistant, and lists PASS/FAIL lines.
-  - `#card` shows the card.
+- **Page**: open `tests/card/harness.html#test` in a browser. It clicks through every tab of the page against a simulated Home Assistant, and lists PASS/FAIL lines.
   - `#page-schedules` (or `patterns`, `daily`, `combined`) shows a tab.
   - Add `-narrow` for the phone layout.

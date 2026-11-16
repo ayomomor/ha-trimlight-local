@@ -182,14 +182,6 @@ async function type(input, value) {
   await tick();
 }
 
-function makeCard() {
-  const card = document.createElement("trimlight-pattern-card");
-  card.setConfig({ entity: "light.porch" });
-  document.getElementById("card").append(card);
-  card.hass = hass;
-  return card;
-}
-
 function makePage() {
   const page = document.createElement("trimlight-panel");
   const narrow = location.hash.endsWith("-narrow");
@@ -201,63 +193,7 @@ function makePage() {
   return page;
 }
 
-async function testCard() {
-  const card = makeCard();
-  await tick();
-  const editor = inside(card.shadowRoot.querySelector("trimlight-pattern-editor"));
-  const { $, $$, button } = editor;
-  const source = () => $("select");
-  check("card: opens what the lights show", source().value === "current", source().value);
-  check("card: strip has 60 dots", $$(".led").length === 60, $$(".led").length);
-  check("card: built-in saved effect is listed but not editable", [...source().options].some((o) => o.textContent === "Rainbow Wave (saved 18) (built-in effect)" && o.disabled));
-
-  await choose(source(), "7");
-  check("card: HALLOWEEN loads its name, mode and colours", $("input[type=text]").value === "HALLOWEEN" && $$("select")[1].value === "chase_forward"
-    && $$("input[type=color]").map((i) => i.value).join() === "#ff2600,#7700ff,#7800ff");
-  check("card: overlay shows lightning", $$("input[type=radio]")[1].checked);
-  check("card: delete is blocked while schedules use it", button("Delete").disabled);
-
-  $$(".swatch")[11].click();
-  await tick();
-  check("card: no-colour swatch makes the selected row unlit", $$(".color-row")[0].querySelector(".none-chip") !== null && $$(".led.off").length === 20);
-  $$(".color-row")[2].click();
-  await tick();
-  $$(".swatch")[6].click();
-  await tick();
-  await type($$("input.dots")[1], "12");
-  button("Show on lights").click();
-  await tick();
-  const shown = calls.at(-1);
-  check("card: Show on lights sends the edited pattern to the light",
-    shown.service === "show_pattern" && shown.target.entity_id === "light.porch"
-    && JSON.stringify(shown.data) === JSON.stringify({ mode: "chase_forward", colors: ["none", "#7700ff", "#ffffff"], dots: [5, 12, 5], speed: 1, brightness: 255 }), JSON.stringify(shown));
-
-  await type($("input[type=text]"), "Spooky");
-  check("card: a new name turns Save into Save as new", button("Save as new") !== undefined);
-  button("Save as new").click();
-  await tick();
-  check("card: Save as new calls save_effect with the new name", calls.at(-1).service === "save_effect" && calls.at(-1).data.name === "Spooky", JSON.stringify(calls.at(-1)));
-
-  await choose(source(), "6");
-  button("+ Add colour").click();
-  await tick();
-  check("card: add colour adds a row", $$(".color-row").length === 4, $$(".color-row").length);
-  $$(".color-row")[3].querySelector("button[title=Remove]").click();
-  await tick();
-  $$(".color-row")[0].querySelector("button[title='Move down']").click();
-  await tick();
-  check("card: remove and move work", $$(".color-row").length === 3 && $$("input[type=color]")[0].value === "#ffffff");
-  const deleteButton = button("Delete");
-  const before = `delete button: ${deleteButton ? `disabled=${deleteButton.disabled}` : "missing"}, source=${source().value}`;
-  deleteButton.click();
-  await tick();
-  check("card: delete calls delete_saved_effect by name and starts a new pattern",
-    calls.at(-1).service === "delete_saved_effect" && calls.at(-1).data.effect === "CANADA DAY" && source().value === "new", `${before}; last call ${JSON.stringify(calls.at(-1))}`);
-  card.remove();
-}
-
 async function testPage() {
-  Object.assign(STATE.control, { by: "schedule", lit: false, until: null });
   const page = makePage();
   await tick();
   const { $, $$ } = inside(page);
@@ -287,7 +223,7 @@ async function testPage() {
   act("mode-on").click();
   await tick();
   const offered = $$(".chooser .opt").map((o) => o.dataset.key).join();
-  check("page: On asks how long for the pick, with nothing chosen for you", $(".chooser h2").textContent === "Turn on HALLOWEEN for how long?" && offered === "30,60,120,schedule,forever" && !$('.chooser .opt[aria-current="true"]'), offered);
+  check("page: On asks how long for the pick, with nothing chosen for you", $(".chooser h2").textContent === "Turn on HALLOWEEN for how long?" && offered === "30,60,120,240,schedule,forever" && !$('.chooser .opt[aria-current="true"]'), offered);
   act("choose", "60").click();
   await tick();
   await tick();
@@ -681,12 +617,6 @@ async function testPage() {
 
 async function run() {
   const hash = location.hash.slice(1);
-  if (hash === "card") {
-    const card = makeCard();
-    await tick();
-    await choose(card.shadowRoot.querySelector("trimlight-pattern-editor").shadowRoot.querySelector("select"), "7");
-    return;
-  }
   if (hash.startsWith("page-")) {
     const page = makePage();
     await tick();
@@ -723,7 +653,6 @@ async function run() {
     return;
   }
   if (hash === "test") {
-    await testCard();
     await testPage();
   }
 }

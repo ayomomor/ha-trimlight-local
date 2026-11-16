@@ -25,12 +25,6 @@ views:
       - type: "grid"
         cards:
           - type: "heading"
-            heading: "Patterns"
-          - type: "custom:trimlight-pattern-card"
-            entity: "light.roofline"
-      - type: "grid"
-        cards:
-          - type: "heading"
             heading: "Schedules"
           - type: "calendar"
             entities:

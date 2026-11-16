@@ -337,3 +337,7 @@ Observed on 2026-11-09, writing to the controller's memory:
 - **Modify calendar schedule (0x11) is accepted.** Re-sending schedule 10 unchanged left the calendar identical, and the controller answered within 2 s, without the silence that follows an add or delete. Whether a changed entry takes effect is still unconfirmed.
 - **Dropped commands.** On 2026-11-09, 2 of 6 overlay writes (sub 0x1b) were lost without a trace. The sync sent 0.3 s after each lost write went unanswered too, while the connection stayed usable. Sending the write again worked both times.
 - **Rename takes effect at once.** Cmd 0x07 with `[n] + name` changed the name in the discovery reply within 5 s, and the TCP connection stayed open. A discovery request sent straight to the controller's address is answered like a broadcast one.
+
+Observed on 2026-11-15, handing back to the schedules:
+
+- **Timer in the middle of a schedule lights it at once.** With the lights showing solid blue in manual mode and a daily schedule on at the time, switching to timer replaced the blue with the schedule's effect straight away, and the current-effect record then held that effect. Turning the daily schedule off again, still in timer mode, turned the lights off within a minute.

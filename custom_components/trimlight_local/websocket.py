@@ -51,7 +51,6 @@ def async_register(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_led_session_end)
     websocket_api.async_register_command(hass, ws_rename)
     websocket_api.async_register_command(hass, ws_waiting_delete)
-    websocket_api.async_register_command(hass, ws_try)
     websocket_api.async_register_command(hass, ws_hold_minutes)
     websocket_api.async_register_command(hass, ws_hold_for)
     websocket_api.async_register_command(hass, ws_music_follow)
@@ -137,12 +136,6 @@ async def ws_rename(hass: HomeAssistant, connection: websocket_api.ActiveConnect
 @websocket_api.async_response
 async def ws_led_session_end(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
     await _run_on_controller(hass, connection, msg, lambda c: c.async_end_led_session(msg["keep"]))
-
-
-@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/try", vol.Required("entity_id"): cv.entity_id, vol.Required("on"): bool})
-@websocket_api.async_response
-async def ws_try(hass: HomeAssistant, connection: websocket_api.ActiveConnection, msg: dict[str, Any]) -> None:
-    await _run_on_controller(hass, connection, msg, lambda c: c.async_try(msg["on"]))
 
 
 @websocket_api.websocket_command(

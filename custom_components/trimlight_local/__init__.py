@@ -6,7 +6,6 @@ import hashlib
 from pathlib import Path
 
 from homeassistant.components import panel_custom
-from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, Platform
@@ -31,14 +30,13 @@ TrimlightConfigEntry = ConfigEntry[TrimlightCoordinator]
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Serve the Trimlight page, the pattern card and the data they read, so installing the integration installs them too."""
+    """Serve the Trimlight page and the data it reads, so installing the integration installs the page too."""
     websocket.async_register(hass)
     await hass.http.async_register_static_paths([StaticPathConfig(UI_URL, str(UI_FILE), True)])
     if "frontend" in hass.config.components:
         # The file is served with long cache headers; a new version query makes browsers fetch an updated one.
         version = hashlib.sha256(await hass.async_add_executor_job(UI_FILE.read_bytes)).hexdigest()[:8]
         module_url = f"{UI_URL}?v={version}"
-        add_extra_js_url(hass, module_url)
         await panel_custom.async_register_panel(
             hass, frontend_url_path=PANEL_URL_PATH, webcomponent_name="trimlight-panel", sidebar_title="Trimlight", sidebar_icon="mdi:led-strip-variant", module_url=module_url
         )
