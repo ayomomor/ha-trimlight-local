@@ -521,9 +521,9 @@ async def test_page_data_and_file(hass: HomeAssistant, controller, hass_ws_clien
     result = (await ws.receive_json())["result"]
     assert result["entities"] == {"light": LIGHT, "mode": MODE, "calendar": CALENDAR}
     assert (result["switch_state"], result["combined_name"], result["repeats"]) == ("manual", "Combined effect", ["today_only", "every_day", "weekdays", "weekend"])
-    assert result["calendar"][5] == {"id": 6, "effect": "CHRISTMAS", "start": [12, 1], "end": [12, 27], "on": "16:22", "off": "07:06", "on_sun": None, "off_sun": None, "holiday": None}
+    assert result["calendar"][5] == {"id": 6, "effect": "CHRISTMAS", "start": [12, 1], "end": [12, 27], "on": "16:22", "off": "07:06", "on_sun": None, "off_sun": None, "sun_stopped": None, "holiday": None}
     assert result["calendar"][3]["effect"] == "Combined effect"
-    assert result["daily"][0] == {"enabled": False, "effect": "Simple", "repeat": "today_only", "on": "16:25", "off": "00:00", "on_sun": None, "off_sun": None}
+    assert result["daily"][0] == {"enabled": False, "effect": "Simple", "repeat": "today_only", "on": "16:25", "off": "00:00", "on_sun": None, "off_sun": None, "sun_stopped": None}
     assert set(result["sun"]) == {"sunrise", "sunset", "location_ok"} and len(result["sun"]["sunset"]) == 5
     assert result["sun"]["location_ok"] is True
     # Home Assistant's default location (Amsterdam) with a US time zone, as in a sandbox whose location was never set.
@@ -641,12 +641,44 @@ async def test_schedule_follows_sunset(hass: HomeAssistant, controller, hass_ws_
     with patch("custom_components.trimlight_local.trimlight.FRESH_SYNC_SECONDS", -1):
         await coordinator.async_refresh()
     writes = len(controller.passthrough)
-    with patch("custom_components.trimlight_local.coordinator.now", return_value=local(2027, 3, 20, 12, 0)):
+    with (
+        patch("custom_components.trimlight_local.coordinator.now", return_value=local(2027, 3, 20, 12, 0)),
+        patch("custom_components.trimlight_local.coordinator.persistent_notification.async_create") as notify,
+    ):
         await coordinator.async_refresh_sun_times()
     assert 9 not in coordinator.sun.calendar
     assert all(sub == Sub.SYNC for sub, _ in controller.passthrough[writes:])
+    assert coordinator.sun.stopped["calendar:9"] == {"event": "sunset", "date": "2027-03-20"}
+    assert notify.call_args.kwargs["title"] == "Trimlight schedule no longer follows the sun" and "Schedule 9 (HALLOWEEN)" in notify.call_args.args[1]
+    await ws.send_json({"id": 2, "type": f"{DOMAIN}/state", "entity_id": LIGHT})
+    schedule = next(s for s in (await ws.receive_json())["result"]["calendar"] if s["id"] == 9)
+    assert schedule["sun_stopped"] == {"event": "sunset", "date": "2027-03-20"}
+
+    # Following sunset again clears the warning and its notification.
+    with (
+        patch("custom_components.trimlight_local.coordinator.now", return_value=local(2027, 3, 20, 12, 5)),
+        patch("custom_components.trimlight_local.coordinator.persistent_notification.async_dismiss") as dismiss,
+    ):
+        await call(hass, "set_schedule", {"schedule_id": 9, ATTR_EFFECT: "HALLOWEEN", **march, "on_sun": "sunset", "on_offset": -15, "off_time": "23:00"}, entity_id=CALENDAR)
+    assert "calendar:9" not in coordinator.sun.stopped and coordinator.sun.calendar[9].on == before_sunset
+    dismiss.assert_called_once()
 
     await call(hass, "delete_schedule", {"schedule_id": 9}, entity_id=CALENDAR)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_an_off_time_of_midnight_ends_that_night(hass: HomeAssistant, controller) -> None:
+    use_fixture(controller, "sync_reply.hex")
+    entry = await setup_entry(hass)
+    with patch("custom_components.trimlight_local.coordinator.now", return_value=local(2027, 6, 30, 10, 0)):
+        await call(hass, "set_schedule", {"schedule_id": 2, ATTR_EFFECT: "INDEPENDENCE DAY", "start_date": "2027-07-04", "end_date": "2027-07-04", "on_sun": "sunset", "on_offset": -120, "off_time": "00:00"}, entity_id=CALENDAR)
+    response = await hass.services.async_call(
+        "calendar", "get_events", {ATTR_ENTITY_ID: CALENDAR, "start_date_time": "2027-07-03 00:00:00", "end_date_time": "2027-07-07 00:00:00"}, blocking=True, return_response=True
+    )
+    [event] = [e for e in response[CALENDAR]["events"] if e["summary"] == "INDEPENDENCE DAY"]
+    on = SunTime("sunset", -120).on_day(hass, date(2027, 7, 4))
+    assert (datetime.fromisoformat(event["start"]), datetime.fromisoformat(event["end"])) == (local(2027, 7, 4, on.hour, on.minute), local(2027, 7, 5, 0, 0))
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
@@ -1106,6 +1138,23 @@ async def test_the_page_sets_how_long_a_change_lasts(hass: HomeAssistant, contro
 
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
+
+
+async def test_removing_the_integration_deletes_what_it_kept(hass: HomeAssistant, controller, hass_storage) -> None:
+    use_fixture(controller, "sync_reply.hex")
+    entry = await setup_entry(hass)
+    coordinator = entry.runtime_data
+    await coordinator.async_set_favourites([3])
+    coordinator.sun.stopped["calendar:9"] = {"event": "sunset", "date": "2027-03-20"}
+    await coordinator.sun.async_save()
+    await coordinator.holidays.async_save()
+    kept = [f"{DOMAIN}.{entry.entry_id}.{name}" for name in ("page", "sun", "holidays")]
+    assert all(key in hass_storage for key in kept)
+    with patch("custom_components.trimlight_local.persistent_notification.async_dismiss") as dismiss:
+        await hass.config_entries.async_remove(entry.entry_id)
+        await hass.async_block_till_done()
+    assert not any(key in hass_storage for key in kept)
+    assert {c.args[1] for c in dismiss.call_args_list} == {f"{DOMAIN}_sun_{entry.entry_id}_calendar_9", f"{DOMAIN}_moved_{entry.entry_id}"}
 
 
 async def test_controller_found_at_a_new_address(hass: HomeAssistant, controller) -> None:

@@ -94,6 +94,8 @@ class SunRules:
     store: Store
     calendar: dict[int, SunRule] = field(default_factory=dict)
     daily: dict[int, SunRule] = field(default_factory=dict)
+    # The date is the day Home Assistant noticed the change, which can be later than the day it was made.
+    stopped: dict[str, dict[str, str]] = field(default_factory=dict)
 
     @classmethod
     def for_entry(cls, hass: HomeAssistant, entry_id: str) -> SunRules:
@@ -103,10 +105,15 @@ class SunRules:
         stored = await self.store.async_load() or {}
         self.calendar = {int(k): _load_rule(v) for k, v in stored.get("calendar", {}).items()}
         self.daily = {int(k): _load_rule(v) for k, v in stored.get("daily", {}).items()}
+        self.stopped = dict(stored.get("stopped", {}))
 
     async def async_save(self) -> None:
         await self.store.async_save(
-            {"calendar": {str(k): _dump_rule(v) for k, v in self.calendar.items()}, "daily": {str(k): _dump_rule(v) for k, v in self.daily.items()}}
+            {
+                "calendar": {str(k): _dump_rule(v) for k, v in self.calendar.items()},
+                "daily": {str(k): _dump_rule(v) for k, v in self.daily.items()},
+                "stopped": self.stopped,
+            }
         )
 
 

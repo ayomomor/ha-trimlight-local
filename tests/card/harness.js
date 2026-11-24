@@ -26,7 +26,7 @@ const STATE = {
   current: { kind: "pattern", mode: "static", speed: 127, brightness: 255, colors: [{ color: "#ff0000", dots: 5 }, { color: "#ffffff", dots: 5 }, { color: "#000000", dots: 5 }] },
   calendar: [
     { id: 6, effect: "CHRISTMAS", start: [12, 1], end: [12, 27], on: "16:22", off: "07:06", on_sun: { event: "sunset", offset: -15 }, off_sun: null },
-    { id: 5, effect: "HALLOWEEN", start: [10, 31], end: [10, 31], on: "16:00", off: "00:00", on_sun: null, off_sun: null },
+    { id: 5, effect: "HALLOWEEN", start: [10, 31], end: [10, 31], on: "16:00", off: "00:00", on_sun: null, off_sun: null, sun_stopped: { event: "sunset", date: "2026-11-20" } },
     { id: 4, effect: "Combined effect", start: [6, 19], end: [6, 19], on: "17:30", off: "23:59", on_sun: null, off_sun: null },
     { id: 10, effect: "CANADA DAY", start: [11, 24], end: [11, 30], on: "16:27", off: "06:51", on_sun: null, off_sun: null, holiday: { key: "thanksgiving", start_offset: -2, end_offset: 4, problem: null, skips: [] } },
   ],
@@ -40,7 +40,7 @@ const STATE = {
     { key: "diwali", name: "Diwali", group: "Hindu, Sikh and Buddhist", dates: { 2025: "2025-10-20", 2026: "2026-11-08", 2027: "2027-10-29", 2028: "2028-10-17", 2029: "2029-11-05" } },
   ],
   daily: [
-    { enabled: false, effect: "CANADA DAY", repeat: "today_only", on: "16:25", off: "00:00", on_sun: null, off_sun: null },
+    { enabled: false, effect: "CANADA DAY", repeat: "today_only", on: "16:25", off: "00:00", on_sun: null, off_sun: null, sun_stopped: { event: "sunrise", date: "2026-11-21" } },
     { enabled: true, effect: "Combined effect", repeat: "weekend", on: "18:00", off: "22:00", on_sun: null, off_sun: null },
   ],
   combined: { effects: ["CHRISTMAS"], interval: 5 },
@@ -393,7 +393,9 @@ async function testPage() {
   let drawer = $(".drawer");
   check("schedules: a day with a schedule opens it", drawer && drawer.querySelector("h2").textContent === "Schedule 6");
   check("schedules: its sunset time opens as sunset - 15", act("time-mode", "on") && $$('[data-act="time-mode"][data-key="on"]').find((b) => b.getAttribute("aria-pressed") === "true").dataset.mode === "sunset" && $('[data-in="offset"][data-key="on"]').value === "-15");
-  check("schedules: the hint shows today's time", drawer.querySelector(".hint span").textContent === "today 16:30", drawer.querySelector(".hint span") && drawer.querySelector(".hint span").textContent);
+  check("schedules: a sunset time doesn't show what it comes to", !drawer.querySelector(".hint") && !drawer.textContent.includes("today "), drawer.textContent.slice(0, 300));
+  check("schedules: a sunset time says Home Assistant moves it every day", [...drawer.querySelectorAll(".note")].some((n) => n.textContent.includes("Home Assistant updates this time every day")));
+  check("schedules: no Time, Sunset or Sunrise icons", $$('[data-act="time-mode"]').every((b) => !b.querySelector("svg")));
   act("save-schedule").click();
   await tick();
   check("schedules: Save sends the schedule with its sun time",
@@ -482,9 +484,26 @@ async function testPage() {
   act("view", "year").click();
   await tick();
 
+  await tab("schedules");
+  $('.legend [data-act="edit"][data-key="5"]').click();
+  await tick();
+  const stopped = $(".drawer .warn-box");
+  check("schedules: a schedule that stopped following sunset says so, and how to fix it", !!stopped && stopped.textContent.includes("No longer follows sunset") && stopped.textContent.includes("detected Nov 20")
+    && stopped.textContent.includes("select Sunset and save"), stopped && stopped.textContent);
+  act("close-drawer").click();
+  await tick();
+  act("view", "list").click();
+  await tick();
+  const halloween = $('.list [data-act="edit"][data-key="5"]');
+  check("schedules: an off time of 00:00 shows as Midnight", !!halloween && halloween.textContent.includes("16:00 – Midnight"), halloween && halloween.textContent);
+  act("view", "year").click();
+  await tick();
+
   // Daily
   await tab("daily");
   check("daily: two cards, Save starts disabled", $$(".daily .card").length === 2 && act("daily-save", 0).disabled);
+  check("daily: a schedule that stopped following sunrise says so", $$(".daily .card")[0].querySelector(".warn-box").textContent.includes("No longer follows sunrise")
+    && $$(".daily .card")[0].querySelector(".warn-box").textContent.includes("detected Nov 21"), $$(".daily .card")[0].textContent.slice(0, 200));
   act("daily-enabled", 0).click();
   await tick();
   $$('[data-act="time-mode"][data-key="daily0on"]').find((b) => b.dataset.mode === "sunset").click();
@@ -597,13 +616,13 @@ async function testPage() {
   // Help and the walkthrough
   act("help").click();
   await tick();
-  check("help: the ? opens an explanation", $(".chooser .help h2").textContent === "How the Trimlight page works" && $(".chooser .help").textContent.includes("tap On first") === false && $(".chooser .help").textContent.includes("On starts with what you picked"));
+  check("help: the ? opens help", $(".chooser .help h2").textContent === "Help" && $(".chooser .help").textContent.includes("On starts with the pattern or effect you selected") && $(".chooser .help").textContent.includes("Where settings are stored"));
   act("tour").click();
   await tick();
-  check("help: Show the walkthrough starts it", !$(".chooser") && $(".tour h2").textContent === "Your roof" && $(".tour .count").textContent === "1 of 6");
+  check("help: Start walkthrough starts it", !$(".chooser") && $(".tour h2").textContent === "Preview" && $(".tour .count").textContent === "1 of 6");
   act("tour-next").click();
   await tick();
-  check("help: the second step is What's on now", $(".tour h2").textContent === "What's on now", $(".tour h2").textContent);
+  check("help: the second step is Status", $(".tour h2").textContent === "Status", $(".tour h2").textContent);
   act("tour-end").click();
   await tick();
   check("help: Skip ends it and remembers that for this user", !$(".tour") && JSON.stringify(wsCalls.at(-1)) === JSON.stringify({ type: "frontend/set_user_data", key: "trimlight_local_tour", value: true }), JSON.stringify(wsCalls.at(-1)));
@@ -613,6 +632,40 @@ async function testPage() {
   await new Promise((resolve) => setTimeout(resolve, 600));
   check("help: someone new gets the walkthrough by themselves", !!fresh.shadowRoot.querySelector(".tour"));
   fresh.remove();
+}
+
+async function testHaControls() {
+  customElements.define("ha-selector", class extends HTMLElement {});
+  tourSeen = true;
+  const page = makePage();
+  await tick();
+  await tick();
+  const { $, $$ } = inside(page);
+  const act = (name, key) => $$(`[data-act="${name}"]`).find((b) => key === undefined || b.dataset.key === String(key));
+  act("tab", "schedules").click();
+  await tick();
+  $('.legend [data-act="edit"][data-key="6"]').click();
+  await tick();
+  const node = (kind, key) => $(`ha-selector[data-ha="${kind}"][data-key="${key}"]`);
+  check("ha controls: dates, the sunset offset and the clock time use Home Assistant's controls",
+    $$("ha-selector[data-ha]").map((n) => `${n.dataset.ha}:${n.dataset.key}`).join() === "date:start,date:end,offset:on,time:off" && !$('[data-in="clock"]') && !$('[data-in="offset"]'),
+    $$("ha-selector[data-ha]").map((n) => `${n.dataset.ha}:${n.dataset.key}`).join());
+  check("ha controls: each gets its selector and value", node("offset", "on").selector.duration.mode === "offset" && node("offset", "on").value.minutes === -15
+    && node("offset", "on").label === "Offset" && node("offset", "on").helper === "Up to 4 hours before or after sunset."
+    && node("time", "off").selector.time.no_second === true && node("time", "off").value === "07:06" && /^\d{4}-12-01$/.test(node("date", "start").value) && !!node("date", "start").hass,
+    JSON.stringify([node("offset", "on").value, node("time", "off").value, node("date", "start").value]));
+  const change = (n, value) => n.dispatchEvent(new CustomEvent("value-changed", { detail: { value } }));
+  change(node("offset", "on"), { hours: 0, minutes: -20 });
+  change(node("time", "off"), "07:30");
+  change(node("date", "start"), "2026-12-03");
+  act("save-schedule").click();
+  await tick();
+  const data = calls.at(-1).data;
+  check("ha controls: Save sends what was picked", data.on_sun === "sunset" && data.on_offset === -20 && data.off_time === "07:30" && data.start_date === "2000-12-03" && data.end_date === "2000-12-27", JSON.stringify(data));
+  act("tab", "daily").click();
+  await tick();
+  check("ha controls: the daily schedules use them too", !!$('ha-selector[data-ha="time"][data-key="daily0on"]') && !$('[data-in="clock"]'));
+  page.remove();
 }
 
 async function run() {
@@ -654,6 +707,7 @@ async function run() {
   }
   if (hash === "test") {
     await testPage();
+    await testHaControls();
   }
 }
 

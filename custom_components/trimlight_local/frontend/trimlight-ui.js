@@ -13,6 +13,42 @@ const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "
 const clamp = (value, low, high) => Math.min(high, Math.max(low, value));
 const pad = (n) => String(n).padStart(2, "0");
 
+/*
+ * Home Assistant only loads its form controls (ha-selector and the time, date and duration inputs behind it) when one of
+ * its own pages needs them, and offers add-on pages no way to ask. Loading the automation editor's code defines them.
+ * If that ever stops working, the page keeps its plain inputs.
+ */
+let haControls = null;
+function loadHaControls() {
+  if (customElements.get("ha-selector")) return Promise.resolve(true);
+  if (!haControls) {
+    const load = (async () => {
+      await customElements.whenDefined("partial-panel-resolver");
+      const config = document.createElement("partial-panel-resolver")._getRoutes({ tmp: { component_name: "config", url_path: "tmp" } }).routes.tmp;
+      await config.load();
+      await customElements.whenDefined("ha-panel-config");
+      await document.createElement("ha-panel-config").routerOptions.routes.automation.load();
+      await customElements.whenDefined("ha-selector");
+      return true;
+    })().catch(() => false);
+    haControls = Promise.race([load, new Promise((done) => setTimeout(() => done(!!customElements.get("ha-selector")), 8000))]);
+  }
+  return haControls;
+}
+
+// Schedules have no year, but a date picker needs one: this uses the year the schedule next runs.
+function nextDates(start, end) {
+  const today = new Date();
+  const now = [today.getMonth() + 1, today.getDate()];
+  const before = (a, b) => a[0] < b[0] || (a[0] === b[0] && a[1] < b[1]);
+  const wraps = before(end, start);
+  let year = today.getFullYear();
+  if (wraps && before(now, start) && !before(end, now)) year -= 1;
+  else if (!wraps && before(end, now)) year += 1;
+  const iso = (y, [m, d]) => `${y}-${pad(m)}-${pad(d)}`;
+  return [iso(year, start), iso(wraps ? year + 1 : year, end)];
+}
+
 function trimlightLights(hass) {
   const fromRegistry = Object.values(hass.entities || {}).filter((e) => e.platform === DOMAIN && e.entity_id.startsWith("light.")).map((e) => e.entity_id);
   if (fromRegistry.length) return fromRegistry;
@@ -111,12 +147,12 @@ const countdown = (iso) => {
 };
 const TOUR_KEY = "trimlight_local_tour";
 const TOUR = [
-  { target: ".hero", title: "Your roof", text: "This picture shows roughly what is on your roof right now." },
-  { target: ".now .what", title: "What's on now", text: "This shows what is on your roof and how long it stays. On schedule means your schedules turn the lights on and off. When you pick something yourself, it counts down the time left before your schedules take over again." },
-  { target: ".now .mode", title: "On schedule or On", text: "Your schedules run the lights until you tap On. Tap On to show your own pick for as long as you choose. Tap On schedule to hand the lights back." },
-  { target: ".tabs", title: "Pick something to show", text: "Pick a pattern or an effect. While the lights are On, it shows on your roof straight away. While they are On schedule, tap On first: On starts with what you picked." },
-  { target: '.tab[data-key="settings"]', title: "Keeping the lights off", text: "Going away? Disable the lights in Settings. They stay off until you enable them again." },
-  { target: ".toolbar .help", title: "Help", text: "Tap here any time to read how the page works or to see this walkthrough again." },
+  { target: ".hero", title: "Preview", text: "An approximate picture of the lights." },
+  { target: ".now .what", title: "Status", text: "Shows what the lights are showing, and whether they follow your schedules. When the lights are On, the time left is shown." },
+  { target: ".now .mode", title: "On schedule and On", text: "Select On to show a pattern or effect for a set time. Select On schedule to return to your schedules." },
+  { target: ".tabs", title: "Patterns and effects", text: "When the lights are On, selecting a pattern or effect shows it immediately. When they are On schedule, select On first." },
+  { target: '.tab[data-key="settings"]', title: "Turning the lights off", text: "To keep the lights off, select Disable the lights in Settings." },
+  { target: ".toolbar .help", title: "Help", text: "Open help, or start this walkthrough again." },
 ];
 const dayWord = (iso) => {
   const d = new Date(iso);
@@ -519,6 +555,7 @@ const PAGE_STYLE = `
   .drawer h2 { margin: 0; font-size: 18px; font-weight: 500; }
   .drawer .seg { justify-self: start; }
   .dates { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .dates.stacked { grid-template-columns: minmax(0, 1fr); }
   .timeset { display: grid; gap: 8px; }
   .timeset .input { width: 116px; }
   .hint { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
@@ -650,6 +687,11 @@ class TrimlightPanel extends HTMLElement {
   }
 
   _setup() {
+    loadHaControls().then((ok) => {
+      if (!ok) return;
+      this._haControls = true;
+      this._safeRender();
+    });
     const root = this.attachShadow({ mode: "open" });
     root.innerHTML = `<style>${PAGE_STYLE}</style>
       <div class="page">
@@ -782,6 +824,7 @@ class TrimlightPanel extends HTMLElement {
     const drawer = this.shadowRoot.querySelector(".drawer");
     if (drawer) drawer.remove();
     if (this._s.tab === "schedules" && this._s.drawer) this._pageEl.insertAdjacentHTML("beforeend", this._drawerView());
+    this._mountHaControls();
   }
 
   _renderControllers() {
@@ -1021,19 +1064,23 @@ class TrimlightPanel extends HTMLElement {
     this._s.chooser = null;
     this._helpOpen = true;
     this._chooserEl.innerHTML = `<div class="chooser" data-act="help-close"><div class="sheet help" role="dialog" aria-modal="true" aria-labelledby="help-title" data-act="noop" tabindex="-1">
-        <h2 id="help-title">How the Trimlight page works</h2>
-        <h3>On schedule or On</h3>
-        <p><b>On schedule</b>: your schedules turn the lights on and off, as set in the Schedules and Daily tabs.</p>
-        <p><b>On</b>: tap it to show your own pick instead. You choose for how long, and the top of the page counts down the time left. When it runs out, your schedules take over again. Tap <b>On schedule</b> to hand back sooner.</p>
-        <h3>Showing a pattern or an effect</h3>
-        <p>Pick a pattern or an effect. While the lights are On, it shows on your roof straight away, and changes you make to it show live. While they are On schedule, nothing on the roof changes until you tap On, and On starts with what you picked.</p>
-        <h3>Keeping the lights off</h3>
-        <p><b>Settings → Disable the lights</b> turns them off and pauses your schedules, for example while you're away. They stay off until you enable them again.</p>
-        <h3>The phone app and automations</h3>
-        <p>Changes made in the Trimlight phone app or by an automation can't ask how long, so they last the time set in Settings.</p>
-        <h3>The picture at the top</h3>
-        <p>It shows roughly what is on your roof. The controller's own animation isn't known in detail, so it can look a little different.</p>
-        <div class="foot"><button class="btn" type="button" data-act="tour">Show the walkthrough</button><span class="grow"></span><button class="btn primary" type="button" data-act="help-close">Close</button></div>
+        <h2 id="help-title">Help</h2>
+        <h3>On schedule and On</h3>
+        <p><b>On schedule</b>: the lights follow your schedules (Schedules and Daily tabs).</p>
+        <p><b>On</b>: the lights show the pattern or effect you select, for the time you set. The time left is shown at the top of the page. When it ends, the lights return to the schedule. Select <b>On schedule</b> to return earlier.</p>
+        <h3>Patterns and effects</h3>
+        <p>When the lights are On, selecting a pattern or effect shows it immediately, and changes are shown as you make them. When the lights are On schedule, select On first. On starts with the pattern or effect you selected.</p>
+        <h3>Turning the lights off</h3>
+        <p>To keep the lights off, go to <b>Settings</b> and select <b>Disable the lights</b>. Schedules are paused until you select <b>Enable</b>.</p>
+        <h3>Sunset and sunrise</h3>
+        <p>A schedule can start or end at sunset or sunrise, with an optional offset. The controller only stores fixed times, so Home Assistant calculates the time and updates the controller every day. If the time is changed in the Trimlight app, the schedule keeps that fixed time, shows a warning, and Home Assistant sends a notification.</p>
+        <h3>Where settings are stored</h3>
+        <p>Schedules and saved effects are stored on the controller, which runs them even when Home Assistant is off. Sunset, sunrise and holiday settings are stored in Home Assistant and included in its backups. After moving to a new Home Assistant installation, set them again on the affected schedules.</p>
+        <h3>Trimlight app and automations</h3>
+        <p>Changes made in the Trimlight app or by an automation last for the time set in Settings.</p>
+        <h3>Preview</h3>
+        <p>The picture at the top is an approximation and can differ from what the lights show.</p>
+        <div class="foot"><button class="btn" type="button" data-act="tour">Start walkthrough</button><span class="grow"></span><button class="btn primary" type="button" data-act="help-close">Close</button></div>
       </div></div>`;
     this._chooserEl.querySelector(".sheet").focus();
   }
@@ -1417,9 +1464,9 @@ class TrimlightPanel extends HTMLElement {
     const range = (x) => (x.start[0] === x.end[0] && x.start[1] === x.end[1] ? shortDay(x.start) : `${shortDay(x.start)} – ${shortDay(x.end)}`);
     const follows = (x) => (x.holiday ? ` · follows ${esc(this._holidayName(x.holiday.key))}${x.holiday.skips && x.holiday.skips.length ? `, skips ${x.holiday.skips.map((k) => k.year).join(", ")}` : ""}` : "");
     const onText = (x) => (x.on_sun ? sunLabel(x.on_sun) : x.on);
-    const offText = (x) => (x.off_sun ? sunLabel(x.off_sun) : `${x.off}${!x.on_sun && x.off <= x.on ? " next day" : ""}`);
+    const offText = (x) => (x.off_sun ? sunLabel(x.off_sun) : x.off === "00:00" ? "Midnight" : `${x.off}${!x.on_sun && x.off <= x.on ? " next day" : ""}`);
     const sunWarning = data.sun && data.sun.location_ok === false
-      ? `<div class="warn-box"><b>Check the home location.</b> Home Assistant puts sunset at ${esc(data.sun.sunset)} here, so its home location doesn't match its time zone. Set it under Settings → System → General before using sunset or sunrise times.</div>` : "";
+      ? `<div class="warn-box"><b>Check the home location.</b> Home Assistant's home location doesn't match its time zone, so sunset and sunrise times would come out wrong. Set it under Settings → System → Home information before using them.</div>` : "";
     const waiting = data.waiting || [];
     const stuck = [...data.calendar, ...waiting].filter((x) => x.holiday && x.holiday.problem)
       .map((x) => `<div class="warn-box"><b>${typeof x.id === "number" ? `Schedule ${x.id} didn't move.` : `The waiting ${esc(this._holidayName(x.holiday.key))} schedule is stuck.`}</b><span>${esc(x.holiday.problem)}</span><button class="btn tonal" type="button" data-act="edit" data-key="${x.id}">Open it</button></div>`).join("");
@@ -1480,13 +1527,67 @@ class TrimlightPanel extends HTMLElement {
   }
 
   _timeSet(label, setting, key) {
-    const sunToday = this._data.sun;
-    const base = setting.mode !== "time" && sunToday ? sunToday[setting.mode] : null;
     return `<div class="timeset"><span class="label">${label}</span>
-      <div class="seg" role="group" aria-label="${label}">${[["time", "clock", "Time"], ["sunset", "sunset", "Sunset"], ["sunrise", "sun", "Sunrise"]].map(([k, ic, l]) => `<button type="button" data-act="time-mode" data-key="${key}" data-mode="${k}" aria-pressed="${setting.mode === k}">${icon(ic)}${l}</button>`).join("")}</div>
+      <div class="seg" role="group" aria-label="${label}">${[["time", "Time"], ["sunset", "Sunset"], ["sunrise", "Sunrise"]].map(([k, l]) => `<button type="button" data-act="time-mode" data-key="${key}" data-mode="${k}" aria-pressed="${setting.mode === k}">${l}</button>`).join("")}</div>
       <div class="row">${setting.mode === "time"
-        ? `<input class="input mono" type="time" value="${setting.clock}" data-in="clock" data-key="${key}" aria-label="${label} time">`
-        : `<input class="input mono" type="number" step="5" min="-240" max="240" value="${setting.offset}" data-in="offset" data-key="${key}" aria-label="Minutes after; negative is before" style="width:90px"><span class="note">min</span>${base ? `<span class="hint">${icon("sun")}<span>today ${shiftClock(base, setting.offset)}</span></span>` : ""}`}</div></div>`;
+        ? this._haControls
+          ? `<ha-selector data-ha="time" data-key="${key}" data-value="${setting.clock}"></ha-selector>`
+          : `<input class="input mono" type="time" value="${setting.clock}" data-in="clock" data-key="${key}" aria-label="${label} time">`
+        : `${this._haControls
+          ? `<ha-selector data-ha="offset" data-key="${key}" data-value="${setting.offset}" data-label="Offset" data-helper="Up to 4 hours before or after ${setting.mode}."></ha-selector>`
+          : `<input class="input mono" type="number" step="5" min="-240" max="240" value="${setting.offset}" data-in="offset" data-key="${key}" aria-label="Minutes after; negative is before" style="width:90px"><span class="note">min</span>`}`}</div></div>`;
+  }
+
+  _mountHaControls() {
+    if (!this._haControls || !this.shadowRoot) return;
+    for (const node of this.shadowRoot.querySelectorAll("ha-selector[data-ha]")) {
+      node.hass = this._hass;
+      if (node.dataset.mounted) continue;
+      node.dataset.mounted = "1";
+      const key = node.dataset.key;
+      if (node.dataset.label) node.label = node.dataset.label;
+      if (node.dataset.helper) node.helper = node.dataset.helper;
+      if (node.dataset.ha === "time") {
+        node.selector = { time: { no_second: true } };
+        node.value = node.dataset.value;
+        node.addEventListener("value-changed", (ev) => {
+          if (!ev.detail.value) return;
+          this._timeTarget(key).clock = String(ev.detail.value).slice(0, 5);
+          this._markDaily(key);
+        });
+      } else if (node.dataset.ha === "offset") {
+        const minutes = Number(node.dataset.value) || 0;
+        node.selector = { duration: { mode: "offset", enable_second: false } };
+        node.value = { hours: Math.trunc(minutes / 60), minutes: minutes % 60 };
+        node.addEventListener("value-changed", (ev) => {
+          const d = ev.detail.value || {};
+          const target = this._timeTarget(key);
+          target.offset = clamp(Math.round((d.days || 0) * 1440 + (d.hours || 0) * 60 + (d.minutes || 0) + (d.seconds || 0) / 60), -240, 240);
+          this._markDaily(key);
+        });
+      } else if (node.dataset.ha === "date") {
+        node.selector = { date: {} };
+        node.value = node.dataset.value;
+        node.addEventListener("value-changed", (ev) => {
+          if (!ev.detail.value) return;
+          const [, month, day] = String(ev.detail.value).split("-").map(Number);
+          this._s.drawer[key] = [month, day];
+        });
+      }
+    }
+  }
+
+  _sunNote(on, off) {
+    return on.mode !== "time" || off.mode !== "time"
+      ? '<p class="note">The controller only stores fixed times. Home Assistant updates this time every day.</p>'
+      : "";
+  }
+
+  _sunStopped(stopped) {
+    if (!stopped) return "";
+    const event = stopped.event === "sunrise" ? "Sunrise" : "Sunset";
+    const [, month, day] = stopped.date.split("-").map(Number);
+    return `<div class="warn-box">${icon("clock")}<span><b>No longer follows ${event.toLowerCase()}.</b> The time was changed in the Trimlight app (detected ${shortDay([month, day])}). To follow ${event.toLowerCase()} again, select ${event} and save.</span></div>`;
   }
 
   _timeTarget(key) {
@@ -1504,13 +1605,22 @@ class TrimlightPanel extends HTMLElement {
       ${dr.waiting && existing ? `<div class="warn-box">${icon("clock")}<span>${esc(this._waitingText(existing))}. Home Assistant holds it off the controller until then, because the controller repeats a schedule's dates every year and would light it on the wrong night.</span></div>` : ""}
       <label class="field"><span class="label">Effect</span><select class="select" data-in="drawer-effect">${names.map((n) => `<option ${n === dr.effect ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
       ${data.holidays && data.holidays.length ? `<div class="field"><span class="label">Dates</span><div class="seg" role="group" aria-label="Dates">${[["fixed", "Same every year"], ["holiday", "Follow a holiday"]].map(([k, l]) => `<button type="button" data-act="date-mode" data-key="${k}" aria-pressed="${dr.dateMode === k}">${l}</button>`).join("")}</div></div>` : ""}
-      ${dr.dateMode === "holiday" ? this._holidayFields() : `<div class="dates"><label class="field"><span class="label">From</span><span class="row">${monthSel("start")}<input class="input mono" style="width:64px" type="number" min="1" max="31" value="${dr.start[1]}" data-in="drawer-day" data-key="start"></span></label>
+      ${dr.dateMode === "holiday" ? this._holidayFields() : this._haControls ? this._dateFields() : `<div class="dates"><label class="field"><span class="label">From</span><span class="row">${monthSel("start")}<input class="input mono" style="width:64px" type="number" min="1" max="31" value="${dr.start[1]}" data-in="drawer-day" data-key="start"></span></label>
         <label class="field"><span class="label">To</span><span class="row">${monthSel("end")}<input class="input mono" style="width:64px" type="number" min="1" max="31" value="${dr.end[1]}" data-in="drawer-day" data-key="end"></span></label></div>`}
+      ${existing && existing.sun_stopped ? this._sunStopped(existing.sun_stopped) : ""}
       ${this._timeSet("On", dr.on, "on")}${this._timeSet("Off", dr.off, "off")}
-      <p class="note">An off time earlier than the on time is the next morning. Built-in effects can't be scheduled directly: save one on the Effects tab first.</p>
+      ${this._sunNote(dr.on, dr.off)}
+      <p class="note">An off time earlier than the on time is on the next day, so 12:00 AM is midnight. Built-in effects can't be scheduled directly: save one on the Effects tab first.</p>
       ${existing && existing.holiday && existing.holiday.problem ? `<div class="warn-box"><b>${dr.waiting ? "It's stuck." : "It didn't move."}</b><span>${esc(existing.holiday.problem)}</span></div>` : ""}
       <div class="actions"><button class="btn primary" type="button" data-act="save-schedule" ${dr.dateMode === "holiday" && dr.from > dr.to ? "disabled" : ""}>${icon("save")}Save</button>${existing ? `<button class="btn ghost danger" type="button" data-act="delete-schedule">${icon("trash")}Delete</button>` : ""}</div>
     </aside>`;
+  }
+
+  _dateFields() {
+    const [start, end] = nextDates(this._s.drawer.start, this._s.drawer.end);
+    const field = (key, label, value) => `<div class="field"><span class="label">${label}</span><ha-selector data-ha="date" data-key="${key}" data-value="${value}"></ha-selector></div>`;
+    return `<div class="dates stacked">${field("start", "From", start)}${field("end", "To", end)}</div>
+      <p class="note">The dates repeat every year. The year shown is the next time the schedule runs.</p>`;
   }
 
   _holidayFields() {
@@ -1639,7 +1749,9 @@ class TrimlightPanel extends HTMLElement {
         <div><div class="day24">${spans.map(([a, b]) => `<i style="left:${(a / 1440) * 100}%;width:${((b - a) / 1440) * 100}%;opacity:${d.enabled ? 0.85 : 0.3}"></i>`).join("")}</div><div class="hours"><span>00</span><span>06</span><span>12</span><span>18</span><span>24</span></div></div>
         <label class="field"><span class="label">Effect</span><select class="select" data-in="daily-effect" data-key="${i}">${d.effect ? "" : '<option value="" selected disabled>Choose an effect</option>'}${names.map((n) => `<option ${n === d.effect ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
         <div class="field"><span class="label">Repeat</span><div class="filters">${REPEAT_CHIPS.map(([k, l]) => `<button type="button" class="chip" data-act="daily-repeat" data-key="${i}" data-mode="${k}" aria-pressed="${d.repeat === k}">${l}</button>`).join("")}</div></div>
+        ${this._sunStopped((data.daily[i] || {}).sun_stopped)}
         <div class="two">${this._timeSet("On", d.on, `daily${i}on`)}${this._timeSet("Off", d.off, `daily${i}off`)}</div>
+        ${this._sunNote(d.on, d.off)}
         <div class="actions"><span class="grow"></span><button class="btn ghost" type="button" data-act="daily-revert" data-key="${i}" ${d.dirty ? "" : "disabled"}>Revert</button><button class="btn primary" type="button" data-act="daily-save" data-key="${i}" ${d.dirty && d.effect ? "" : "disabled"}>${icon("save")}Save</button></div>
       </div>`;
     }).join("")}</div><p class="note" style="margin-top:14px">The two can't overlap on a day they share. Daily schedules run in Timer mode, and saving takes about 8 seconds.</p>`;
@@ -2008,8 +2120,6 @@ class TrimlightPanel extends HTMLElement {
         const target = this._timeTarget(t.dataset.key);
         target.offset = clamp(parseInt(t.value, 10) || 0, -240, 240);
         this._markDaily(t.dataset.key);
-        const hint = t.parentElement.querySelector(".hint span");
-        if (hint && this._data.sun) hint.textContent = `today ${shiftClock(this._data.sun[target.mode], target.offset)}`;
         return;
       }
       case "drawer-day": s.drawer[t.dataset.key][1] = clamp(parseInt(t.value, 10) || 1, 1, 31); return;

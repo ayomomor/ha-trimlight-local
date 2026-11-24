@@ -219,6 +219,7 @@ def describe(coordinator: TrimlightCoordinator, entity_ids: dict[str, str]) -> d
                 "off": f"{s.off_time:%H:%M}",
                 "on_sun": _sun(coordinator.sun_setting("calendar", s.id, "on")),
                 "off_sun": _sun(coordinator.sun_setting("calendar", s.id, "off")),
+                "sun_stopped": coordinator.sun.stopped.get(f"calendar:{s.id}"),
                 "holiday": _holiday(coordinator, coordinator.holiday_rule(s.id), f"c{s.id}"),
             }
             for s in data.calendar
@@ -234,6 +235,7 @@ def describe(coordinator: TrimlightCoordinator, entity_ids: dict[str, str]) -> d
                 "off": f"{s.off_time:%H:%M}",
                 "on_sun": _sun(coordinator.sun_setting("daily", i, "on")),
                 "off_sun": _sun(coordinator.sun_setting("daily", i, "off")),
+                "sun_stopped": coordinator.sun.stopped.get(f"daily:{i}"),
             }
             for i, s in enumerate(data.daily)
         ],

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-from homeassistant.components import panel_custom
+from homeassistant.components import panel_custom, persistent_notification
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, Platform
@@ -17,7 +17,9 @@ from homeassistant.util import dt as dt_util
 
 from . import websocket
 from .const import DOMAIN, PANEL_URL_PATH, SUN_UPDATE_HOUR
-from .coordinator import TrimlightCoordinator
+from .coordinator import TrimlightCoordinator, moved_notification_id, page_store, sun_notification_id
+from .holiday_rules import HolidayRules
+from .sun import SunRules
 from .trimlight import TrimlightClient
 
 PLATFORMS = [Platform.CALENDAR, Platform.LIGHT, Platform.NUMBER, Platform.SELECT, Platform.SWITCH, Platform.TIME]
@@ -66,3 +68,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: TrimlightConfigEntry) -
     if unloaded := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         await entry.runtime_data.client.close()
     return unloaded
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: TrimlightConfigEntry) -> None:
+    """Delete what Home Assistant kept for a removed controller: its sun and holiday rules, the page's settings and its notifications."""
+    sun = SunRules.for_entry(hass, entry.entry_id)
+    await sun.async_load()
+    for key in sun.stopped:
+        persistent_notification.async_dismiss(hass, sun_notification_id(entry.entry_id, *key.split(":")))
+    persistent_notification.async_dismiss(hass, moved_notification_id(entry.entry_id))
+    for store in (sun.store, HolidayRules.for_entry(hass, entry.entry_id).store, page_store(hass, entry.entry_id)):
+        await store.async_remove()

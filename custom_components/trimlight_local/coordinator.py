@@ -132,7 +132,7 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         self.sun = SunRules.for_entry(hass, entry.entry_id)
         self.holidays = HolidayRules.for_entry(hass, entry.entry_id)
         self.holiday_dates = HolidayDates()
-        self._page_store: Store = Store(hass, 1, f"{DOMAIN}.{entry.entry_id}.page")
+        self._page_store: Store = page_store(hass, entry.entry_id)
         self.favourites: list[int] = []
         self.led_session: LedSession | None = None
         self.trial: Trial | None = None
@@ -237,7 +237,7 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
             f"The Trimlight controller {self.config_entry.title} stopped answering at {old} and was found at {moved.host}. "
             "Home Assistant uses the new address from now on. A DHCP reservation in your router keeps the address from changing.",
             title="Trimlight controller moved",
-            notification_id=f"{DOMAIN}_moved_{self.config_entry.entry_id}",
+            notification_id=moved_notification_id(self.config_entry.entry_id),
         )
         return True
 
@@ -691,6 +691,7 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         )
         await self._async_write_calendar(schedule, new)
         _set_rule(self.sun.calendar, schedule.id, rule_for(on, off, times))
+        self._sun_resumed("calendar", schedule.id)
         await self.sun.async_save()
         if holiday is not None:
             holiday.written = (schedule.start, schedule.end)
@@ -731,6 +732,7 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
     async def _async_take_off(self, schedule_id: int) -> None:
         await self._async_write(lambda: self.client.delete_calendar_schedule(schedule_id), lambda s: all(c.id != schedule_id for c in s.calendar), f"take schedule {schedule_id} off the controller")
         self.holidays.calendar.pop(schedule_id, None)
+        self._sun_resumed("calendar", schedule_id)
         if self.sun.calendar.pop(schedule_id, None) is not None:
             await self.sun.async_save()
 
@@ -940,6 +942,7 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         self.holidays.calendar[schedule.id] = rule
         del self.holidays.waiting[key]
         _set_rule(self.sun.calendar, schedule.id, rule_for(waiting.on, waiting.off, times))
+        self._sun_resumed("calendar", schedule.id)
         return True
 
     def _time_settings(self, schedule: CalendarSchedule) -> tuple[TimeSetting, TimeSetting]:
@@ -953,6 +956,7 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
         if all(s.id != schedule_id for s in self._require_data().calendar):
             raise ServiceValidationError(f"There is no schedule {schedule_id}")
         await self._async_write(lambda: self.client.delete_calendar_schedule(schedule_id), lambda s: all(c.id != schedule_id for c in s.calendar), f"delete schedule {schedule_id}")
+        self._sun_resumed("calendar", schedule_id)
         if self.sun.calendar.pop(schedule_id, None) is not None:
             await self.sun.async_save()
         if self.holidays.calendar.pop(schedule_id, None) is not None:
@@ -979,6 +983,7 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
             raise ServiceValidationError("The two daily schedules cannot overlap in time")
         await self._async_write_daily(index, schedule)
         _set_rule(self.sun.daily, index, rule_for(on, off, times))
+        self._sun_resumed("daily", index)
         await self.sun.async_save()
 
     async def _async_write_daily(self, index: int, schedule: DailySchedule) -> None:
@@ -1017,6 +1022,7 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
             if rule.written is not None and rule.written != (schedule.on_time, schedule.off_time):
                 _LOGGER.info("Schedule %d's times were changed outside Home Assistant, so they no longer follow the sun", schedule.id)
                 del self.sun.calendar[schedule.id]
+                self._sun_stopped("calendar", schedule.id, rule, today, f"Schedule {schedule.id} ({self.saved_effect_name(schedule.effect_id)})")
                 changed = True
                 continue
             if schedule_day(today) not in schedule_days(schedule.start, schedule.end):
@@ -1037,6 +1043,7 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
             if rule.written is not None and rule.written != (schedule.on_time, schedule.off_time):
                 _LOGGER.info("Daily schedule %d's times were changed outside Home Assistant, so they no longer follow the sun", index + 1)
                 del self.sun.daily[index]
+                self._sun_stopped("daily", index, rule, today, f"Daily schedule {index + 1}")
                 changed = True
                 continue
             # Rewriting a "today only" schedule would move it to today, because the command carries today's date.
@@ -1052,8 +1059,27 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
                 continue
             rule.written = times
             changed = True
+        ids = {s.id for s in self.data.calendar}
+        for key in [k for k in self.sun.stopped if k.startswith("calendar:") and int(k.split(":")[1]) not in ids]:
+            self._sun_resumed(*key.split(":"))
+            changed = True
         if changed:
             await self.sun.async_save()
+
+    def _sun_stopped(self, kind: str, key: int, rule: SunRule, today: date, name: str) -> None:
+        event = (rule.on or rule.off).event
+        self.sun.stopped[f"{kind}:{key}"] = {"event": event, "date": today.isoformat()}
+        persistent_notification.async_create(
+            self.hass,
+            f"{name} no longer follows {event} because its time was changed in the Trimlight app. "
+            f"To follow {event} again, open the schedule on the Trimlight page, select {event.capitalize()} and save.",
+            title="Trimlight schedule no longer follows the sun",
+            notification_id=sun_notification_id(self.config_entry.entry_id, kind, key),
+        )
+
+    def _sun_resumed(self, kind: str, key: int | str) -> None:
+        if self.sun.stopped.pop(f"{kind}:{key}", None) is not None:
+            persistent_notification.async_dismiss(self.hass, sun_notification_id(self.config_entry.entry_id, kind, key))
 
     def led_setup(self) -> LedSetup:
         data = self._require_data()
@@ -1245,6 +1271,18 @@ def _dark(start: tuple[int, int], end: tuple[int, int], today: date, until: date
 
 def _whole_minutes(value: TimeSetting) -> TimeSetting:
     return value.replace(second=0, microsecond=0) if isinstance(value, time) else value
+
+
+def page_store(hass: HomeAssistant, entry_id: str) -> Store:
+    return Store(hass, 1, f"{DOMAIN}.{entry_id}.page")
+
+
+def sun_notification_id(entry_id: str, kind: str, key: int | str) -> str:
+    return f"{DOMAIN}_sun_{entry_id}_{kind}_{key}"
+
+
+def moved_notification_id(entry_id: str) -> str:
+    return f"{DOMAIN}_moved_{entry_id}"
 
 
 def _set_rule(rules: dict[int, SunRule], key: int, rule: SunRule | None) -> None:

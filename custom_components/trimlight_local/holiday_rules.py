@@ -142,6 +142,7 @@ HOLIDAYS: dict[str, Holiday] = {
     "canada_day": Holiday("Canada Day", OTHER, _fixed(7, 1)),
     "nigeria_independence_day": Holiday("Nigerian Independence Day", OTHER, _fixed(10, 1)),
     "day_of_the_dead": Holiday("Day of the Dead", OTHER, _fixed(11, 2)),
+    "boxing_day": Holiday("Boxing Day", OTHER, _fixed(12, 26)),
     "kwanzaa": Holiday("Kwanzaa", OTHER, _fixed(12, 26)),
 }
 

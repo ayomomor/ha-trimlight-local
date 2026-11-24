@@ -243,6 +243,7 @@ set_schedule:
             - canada_day
             - nigeria_independence_day
             - day_of_the_dead
+            - boxing_day
             - kwanzaa
     holiday_start_offset: &holiday_offset
       example: -2

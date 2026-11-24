@@ -164,7 +164,7 @@ The lights can follow a speaker, the way the phone app follows its own music pla
 
 ### Sunrise and sunset times
 
-Any schedule's on or off time can follow sunset or sunrise, with an offset in minutes. Use `on_sun` / `off_sun` and `on_offset` / `off_offset` in place of `on_time` / `off_time`, or pick "At sunset" on the Trimlight page.
+Any schedule's on or off time can follow sunset or sunrise, with an offset in minutes. Use `on_sun` / `off_sun` and `on_offset` / `off_offset` in place of `on_time` / `off_time`, or pick **Sunset** or **Sunrise** on the Trimlight page.
 
 The controller only stores clock times. The phone app looks sunset up online once and stores that fixed time. Home Assistant does better, from its own location:
 
@@ -173,11 +173,11 @@ The controller only stores clock times. The phone app looks sunset up online onc
   - The controller pauses for about 15 seconds after each calendar-schedule change.
   - Noon is used because it is outside evening and early-morning on/off times.
 - **The calendar** shows each night's own sun time.
-- **If you change that schedule's time in the phone app**, Home Assistant notices at its next update and stops adjusting it, so the app's change stays.
+- **If you change that schedule's time in the phone app**, Home Assistant notices at its next update and stops adjusting it, so the app's change stays. The schedule then shows a warning on the Trimlight page, and Home Assistant sends a notification. Choose sunset or sunrise again and save to follow it again.
 - **Setting a clock time** for a daily schedule (for example with its time entity) stops that time following the sun.
 - **A "Today only" daily schedule** gets its sun time when saved and isn't rewritten afterwards. Rewriting it would move it to the day of the rewrite.
 
-Sun times use Home Assistant's **home location** (Settings → System → General), which must match its time zone. If it doesn't (for example, a location never set while the time zone is set), sunset comes out in the morning. The Trimlight page warns about that.
+Sun times use Home Assistant's **home location** (Settings → System → Home information), which must match its time zone. If it doesn't (for example, a location never set while the time zone is set), sunset comes out in the morning. The Trimlight page warns about that.
 
 ### Holidays that move
 
@@ -196,7 +196,7 @@ data:
   off_time: "23:00"
 ```
 
-The page lists 56 holidays in groups:
+The page lists 57 holidays in groups:
 
 - **US holidays**: the fixed ones (New Year's Day, Valentine's Day, St. Patrick's Day, Juneteenth, Independence Day, Halloween, Veterans Day, Christmas Eve, Christmas Day, New Year's Eve) and the moving ones (Martin Luther King Jr. Day, Presidents' Day, Mardi Gras, Good Friday, Easter, Mother's Day, Memorial Day, Father's Day, Labor Day, Grandparents Day, Columbus Day / Indigenous Peoples' Day, Election Day, Thanksgiving). Fixed dates could be an ordinary schedule too; they are listed so every holiday can be picked the same way.
 - **Christian**: Ash Wednesday, Palm Sunday, Pentecost, Orthodox Christmas, Orthodox Easter.
@@ -204,7 +204,7 @@ The page lists 56 holidays in groups:
 - **Islamic** (estimated: the actual day depends on the moon sighting): Eid al-Fitr, Eid al-Adha, Islamic New Year, the Prophet's Birthday.
 - **Hindu, Sikh and Buddhist**: Holi, Vesak / Buddha Purnima, Raksha Bandhan, Janmashtami, Ganesh Chaturthi, Dussehra, Diwali, Guru Nanak Jayanti.
 - **East Asian**: Lunar New Year, Dragon Boat Festival, Mid-Autumn Festival.
-- **Other days**: Nowruz, Cinco de Mayo, Canada Day, Nigerian Independence Day, Day of the Dead, Kwanzaa.
+- **Other days**: Nowruz, Cinco de Mayo, Canada Day, Nigerian Independence Day, Day of the Dead, Boxing Day, Kwanzaa.
 
 US and Christian dates are worked out by rule, for any year. The Jewish, Islamic, Hindu, Sikh, Buddhist, East Asian dates and Nowruz come from the holidays library that ships with Home Assistant, whose lunar calendars reach about ten years ahead (Indian holidays to 2035). Past that, the schedule stays where it is and the page says so.
 
@@ -235,6 +235,16 @@ data:
   brightness: 200
 ```
 
+### Where settings are stored
+
+Schedules, saved effects, the combined effect and the LED setup are stored on the controller, which runs them even when Home Assistant is off. The controller only stores fixed times and dates, so the following are stored in Home Assistant, per controller, in its config folder:
+
+- `.storage/trimlight_local.<id>.sun`: sunset and sunrise settings, and schedules that no longer follow them.
+- `.storage/trimlight_local.<id>.holidays`: holiday settings, and schedules waiting for their dates.
+- `.storage/trimlight_local.<id>.page`: Trimlight page settings (favourites, how long changes from the Trimlight app and automations last, the current On time, and music settings).
+
+These files are included in Home Assistant backups. When Home Assistant is off, the controller keeps the times and dates it was last sent; they are updated when Home Assistant starts. After moving to a new Home Assistant installation, or removing and adding the integration again, set the sunset, sunrise and holiday settings again on the affected schedules; the schedules stay on the controller with their last fixed times and dates. Removing the integration deletes these files.
+
 ## The Trimlight page
 
 The integration adds **Trimlight** to the sidebar, a local stand-in for the phone app. There is nothing else to install. It uses Home Assistant's theme, light or dark.
@@ -257,7 +267,7 @@ The integration adds **Trimlight** to the sidebar, a local stand-in for the phon
 - **Schedules**:
   - Views: **Year** (12 small months, coloured like each schedule's pattern), **Month** (multi-day bars) and **List**.
   - Click a day to open its schedule, or to add one starting that day. The editor opens at the side.
-  - On and off times can be clock times or follow sunset or sunrise, with an offset.
+  - On and off times can be clock times or follow sunset or sunrise, with an offset before or after. Times, dates and offsets use Home Assistant's own time, date and offset controls.
   - Dates can be the same every year, or follow a holiday such as Easter or Thanksgiving. The editor previews the coming three years and flags any that would overlap another schedule.
 - **Daily**: both daily schedules, with a 24-hour bar showing when each is on.
 - **Combined effect**: the saved effects it plays in turn, the minutes each plays, and a one-cycle timeline.
