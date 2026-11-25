@@ -329,8 +329,8 @@ class TrimlightCoordinator(DataUpdateCoordinator[SyncState]):
             "lit": self.lights_lit,
             "by": self.controlled_by,
             "until": None if until is None else until.isoformat(),
-            "window": None if lit is None else {"effect": self.saved_effect_name(lit.effect_id), "effect_id": lit.effect_id, "end": lit.end.isoformat()},
-            "windows": [{"start": w.start.isoformat(), "end": w.end.isoformat(), "effect": self.saved_effect_name(w.effect_id), "kind": w.kind} for w in windows],
+            "window": None if lit is None else {"effect": self.saved_effect_name(lit.effect_id), "effect_id": lit.effect_id, "end": lit.end.isoformat(), "all_day": _all_day(lit)},
+            "windows": [{"start": w.start.isoformat(), "end": w.end.isoformat(), "effect": self.saved_effect_name(w.effect_id), "kind": w.kind, "all_day": _all_day(w)} for w in windows],
             "hold_minutes": self.hold_minutes,
             "hold_choices": list(HOLD_CHOICES),
             "music": self.music.summary(),
@@ -1273,6 +1273,10 @@ def _whole_minutes(value: TimeSetting) -> TimeSetting:
     return value.replace(second=0, microsecond=0) if isinstance(value, time) else value
 
 
+# How the phone app stores a schedule that runs all day, and how the page saves one.
+ALL_DAY = (time(0, 0), time(23, 59))
+
+
 def page_store(hass: HomeAssistant, entry_id: str) -> Store:
     return Store(hass, 1, f"{DOMAIN}.{entry_id}.page")
 
@@ -1283,6 +1287,10 @@ def sun_notification_id(entry_id: str, kind: str, key: int | str) -> str:
 
 def moved_notification_id(entry_id: str) -> str:
     return f"{DOMAIN}_moved_{entry_id}"
+
+
+def _all_day(window: Window) -> bool:
+    return window.kind == "calendar" and (window.start.time(), window.end.time()) == ALL_DAY
 
 
 def _set_rule(rules: dict[int, SunRule], key: int, rule: SunRule | None) -> None:

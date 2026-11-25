@@ -265,9 +265,10 @@ The integration adds **Trimlight** to the sidebar, a local stand-in for the phon
   - Tapping one picks it, and shows it on the lights while they are On. Speed, length, brightness and direction sit beside it, and **Save** puts it in the controller's library so schedules can use it. The controller saves whatever is showing, so saving shows the effect; lights that were on schedule go back to it afterwards.
 - **Music**: the 18 music effects, with colour, length and sensitivity, driven by the controller's own audio (AUX) input or by a speaker playing music through Home Assistant.
 - **Schedules**:
-  - Views: **Year** (12 small months, coloured like each schedule's pattern), **Month** (multi-day bars) and **List**.
+  - Views: **Year** (12 small months, coloured like each schedule's pattern), **Month** (multi-day bars) and **List**. The list shows each schedule under its holiday, or its dates when it doesn't follow one, with its times and effect.
   - Click a day to open its schedule, or to add one starting that day. The editor opens at the side.
   - On and off times can be clock times or follow sunset or sunrise, with an offset before or after. Times, dates and offsets use Home Assistant's own time, date and offset controls.
+  - **All day** runs a schedule from midnight at the start of its first date to midnight at the end of its last date. The controller stores it as 00:00 to 23:59, as the Trimlight app does, so the lights are off for the last minute of each day. Home Assistant's calendar shows these as all-day events.
   - Dates can be the same every year, or follow a holiday such as Easter or Thanksgiving. The editor previews the coming three years and flags any that would overlap another schedule.
 - **Daily**: both daily schedules, with a 24-hour bar showing when each is on.
 - **Combined effect**: the saved effects it plays in turn, the minutes each plays, and a one-cycle timeline.

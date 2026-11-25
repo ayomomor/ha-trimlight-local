@@ -28,6 +28,7 @@ const STATE = {
     { id: 6, effect: "CHRISTMAS", start: [12, 1], end: [12, 27], on: "16:22", off: "07:06", on_sun: { event: "sunset", offset: -15 }, off_sun: null },
     { id: 5, effect: "HALLOWEEN", start: [10, 31], end: [10, 31], on: "16:00", off: "00:00", on_sun: null, off_sun: null, sun_stopped: { event: "sunset", date: "2026-11-20" } },
     { id: 4, effect: "Combined effect", start: [6, 19], end: [6, 19], on: "17:30", off: "23:59", on_sun: null, off_sun: null },
+    { id: 2, effect: "CANADA DAY", start: [7, 4], end: [7, 4], on: "00:00", off: "23:59", on_sun: null, off_sun: null, all_day: true },
     { id: 10, effect: "CANADA DAY", start: [11, 24], end: [11, 30], on: "16:27", off: "06:51", on_sun: null, off_sun: null, holiday: { key: "thanksgiving", start_offset: -2, end_offset: 4, problem: null, skips: [] } },
   ],
   waiting: [
@@ -387,7 +388,7 @@ async function testPage() {
   const pausedBox = $$(".warn-box").find((b) => b.textContent.includes("Schedules are paused"));
   check("schedules: says they are paused by your change, with a way back", !!pausedBox && pausedBox.textContent.includes("take over again at") && !!pausedBox.querySelector('[data-act="resume"]'), pausedBox ? pausedBox.textContent : "none");
   check("schedules: Dec 1-27 is coloured like CHRISTMAS", $$(".mini")[11].querySelectorAll(".g span.on").length === 27);
-  check("schedules: the legend lists every schedule, and the waiting one", $$(".legend button").length === 5 && $$(".legend button.waiting").length === 1);
+  check("schedules: the year view shows the months only", !$(".legend") && !$(".year button[data-act=\"edit\"]"));
   $$(".mini")[11].querySelectorAll('.g span[data-act="day"]')[9].click();
   await tick();
   let drawer = $(".drawer");
@@ -414,13 +415,28 @@ async function testPage() {
   act("view", "list").click();
   await tick();
   const rows = $$(".list button:not(.waiting)");
-  check("schedules: the list is in date order with sun times", rows.map((r) => r.querySelector("b").textContent).join("|") === "Jun 19|Oct 31|Nov 24 – Nov 30|Dec 1 – Dec 27" && rows[3].querySelector(".mono").textContent === "Sunset − 15 min – 07:06",
-    rows.map((r) => r.querySelector(".mono").textContent).join("|"));
+  check("schedules: the list leads with the holiday, or the dates when there is none", rows.map((r) => r.querySelector("b").textContent).join("|") === "Jun 19|Jul 4|Oct 31|Thanksgiving|Dec 1 – Dec 27"
+    && rows[3].querySelector("small").textContent === "Nov 24 – Nov 30", rows.map((r) => r.querySelector("b").textContent).join("|"));
+  check("schedules: the list shows times, All day, and the effect", rows[4].querySelector(".mono").textContent === "Sunset − 15 min – 07:06" && rows[1].querySelector(".mono").textContent === "All day"
+    && rows[1].lastElementChild.textContent === "CANADA DAY", rows.map((r) => r.querySelector(".mono").textContent).join("|"));
+  rows[1].click();
+  await tick();
+  check("schedules: an all-day schedule opens with All day on and no times", act("all-day").getAttribute("aria-checked") === "true" && !act("time-mode", "on"));
+  act("save-schedule").click();
+  await tick();
+  check("schedules: All day saves as 00:00 to 23:59, the way the phone app stores it", JSON.stringify(last().data) === JSON.stringify({ effect: "CANADA DAY", start_date: "2000-07-04", end_date: "2000-07-04", on_time: "00:00", off_time: "23:59", schedule_id: 2 }), JSON.stringify(last().data));
+  $('.list [data-act="edit"][data-key="4"]').click();
+  await tick();
+  check("schedules: other schedules open with All day off and their times", act("all-day").getAttribute("aria-checked") === "false" && !!act("time-mode", "on"));
+  act("all-day").click();
+  await tick();
+  check("schedules: turning All day on hides the times", act("all-day").getAttribute("aria-checked") === "true" && !act("time-mode", "on"));
+  act("close-drawer").click();
+  await tick();
 
   // Holidays
-  act("view", "year").click();
-  await tick();
-  const held = $(".legend button.waiting");
+  const held = $(".list button.waiting");
+  check("holidays: the waiting schedule leads with its holiday", held.querySelector("b").textContent === "Diwali", held.querySelector("b").textContent);
   check("holidays: the waiting Diwali schedule says when it lights and when it goes back on",
     held.querySelector("small").textContent === "Follows Diwali, skips 2027. Next on Tue Oct 17, 2028; on the controller from Oct 18, 2027", held.querySelector("small").textContent);
   held.click();
@@ -432,14 +448,14 @@ async function testPage() {
   await tick();
   check("holidays: saving it replaces the waiting one", JSON.stringify(last().data) === JSON.stringify({ effect: "HALLOWEEN", holiday: "diwali", holiday_start_offset: 0, holiday_end_offset: 0, on_time: "18:00", off_time: "23:00", waiting_id: "w1" }),
     JSON.stringify(last().data));
-  $(".legend button.waiting").click();
+  $(".list button.waiting").click();
   await tick();
   act("delete-schedule").click();
   await tick();
-  check("holidays: Delete removes the waiting schedule", JSON.stringify(wsCalls.at(-1)) === JSON.stringify({ type: "trimlight_local/waiting_delete", entity_id: "light.porch", waiting_id: "w1" }) && !$(".legend button.waiting"),
+  check("holidays: Delete removes the waiting schedule", JSON.stringify(wsCalls.at(-1)) === JSON.stringify({ type: "trimlight_local/waiting_delete", entity_id: "light.porch", waiting_id: "w1" }) && !$(".list button.waiting"),
     JSON.stringify(wsCalls.at(-1)));
-  const thanksgivingWeek = $$(".legend button").find((b) => b.dataset.key === "10");
-  check("holidays: the legend says schedule 10 follows Thanksgiving", thanksgivingWeek.querySelector("small").textContent === "Nov 24 – Nov 30 · follows Thanksgiving", thanksgivingWeek.querySelector("small").textContent);
+  const thanksgivingWeek = $$(".list button").find((b) => b.dataset.key === "10");
+  check("holidays: schedule 10 is listed as Thanksgiving, with its dates", thanksgivingWeek.querySelector("b").textContent === "Thanksgiving" && thanksgivingWeek.querySelector("small").textContent === "Nov 24 – Nov 30", thanksgivingWeek.textContent);
   thanksgivingWeek.click();
   await tick();
   const years = () => $$(".drawer .years li").map((li) => li.textContent.trim());
@@ -485,7 +501,9 @@ async function testPage() {
   await tick();
 
   await tab("schedules");
-  $('.legend [data-act="edit"][data-key="5"]').click();
+  act("view", "list").click();
+  await tick();
+  $('.list [data-act="edit"][data-key="5"]').click();
   await tick();
   const stopped = $(".drawer .warn-box");
   check("schedules: a schedule that stopped following sunset says so, and how to fix it", !!stopped && stopped.textContent.includes("No longer follows sunset") && stopped.textContent.includes("detected Nov 20")
@@ -644,7 +662,9 @@ async function testHaControls() {
   const act = (name, key) => $$(`[data-act="${name}"]`).find((b) => key === undefined || b.dataset.key === String(key));
   act("tab", "schedules").click();
   await tick();
-  $('.legend [data-act="edit"][data-key="6"]').click();
+  act("view", "list").click();
+  await tick();
+  $('.list [data-act="edit"][data-key="6"]').click();
   await tick();
   const node = (kind, key) => $(`ha-selector[data-ha="${kind}"][data-key="${key}"]`);
   check("ha controls: dates, the sunset offset and the clock time use Home Assistant's controls",
@@ -674,7 +694,7 @@ async function run() {
     const page = makePage();
     await tick();
     const key = hash.slice(5).replace("-narrow", "");
-    const view = { month: "schedules", list: "schedules", drawer: "schedules", holiday: "schedules", "settings-test": "settings" }[key] || key;
+    const view = { month: "schedules", list: "schedules", drawer: "schedules", allday: "schedules", holiday: "schedules", "settings-test": "settings" }[key] || key;
     inside(page).$(`[data-act="tab"][data-key="${view}"]`).click();
     await tick();
     if (key === "month" || key === "list") {
@@ -682,7 +702,13 @@ async function run() {
       await tick();
     }
     if (key === "holiday") {
-      inside(page).$('.legend button[data-key="10"]').click();
+      inside(page).$('[data-act="view"][data-key="list"]').click();
+      await tick();
+      inside(page).$('.list button[data-key="10"]').click();
+      await tick();
+    }
+    if (key === "allday") {
+      inside(page).$$(".mini")[6].querySelectorAll('.g span[data-act="day"]')[3].click();
       await tick();
     }
     if (key === "drawer") {

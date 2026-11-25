@@ -17,7 +17,7 @@ from homeassistant.const import SUN_EVENT_SUNRISE, SUN_EVENT_SUNSET
 from .const import COMBINED_EFFECT_NAME, DOMAIN, MUSIC_EFFECTS, PATTERN_MODES, REPEATS
 from .control import HOLD_CHOICES
 from .music import DELAY_RANGE_MS
-from .coordinator import TrimlightCoordinator, writable_from
+from .coordinator import ALL_DAY, TrimlightCoordinator, writable_from
 from .holiday_rules import HOLIDAYS, HolidayRule
 from .sun import SunTime, now, window_times
 from .effects import BUILTIN_EFFECTS, CUSTOM_MODES_V2
@@ -220,6 +220,7 @@ def describe(coordinator: TrimlightCoordinator, entity_ids: dict[str, str]) -> d
                 "on_sun": _sun(coordinator.sun_setting("calendar", s.id, "on")),
                 "off_sun": _sun(coordinator.sun_setting("calendar", s.id, "off")),
                 "sun_stopped": coordinator.sun.stopped.get(f"calendar:{s.id}"),
+                "all_day": (s.on_time, s.off_time) == ALL_DAY and s.id not in coordinator.sun.calendar,
                 "holiday": _holiday(coordinator, coordinator.holiday_rule(s.id), f"c{s.id}"),
             }
             for s in data.calendar
@@ -279,6 +280,7 @@ def _waiting(coordinator: TrimlightCoordinator) -> list[dict[str, Any]]:
                 "off": clock(1, waiting.off),
                 "on_sun": _sun(waiting.on if isinstance(waiting.on, SunTime) else None),
                 "off_sun": _sun(waiting.off if isinstance(waiting.off, SunTime) else None),
+                "all_day": (waiting.on, waiting.off) == ALL_DAY,
                 "next": None if window is None else [window[0].isoformat(), window[1].isoformat()],
                 "from": None if window is None else writable_from(window, today).isoformat(),
             }

@@ -29,7 +29,7 @@ from .const import (
     SERVICE_DELETE_SCHEDULE,
     SERVICE_SET_SCHEDULE,
 )
-from .coordinator import TrimlightCoordinator, next_daily_day
+from .coordinator import ALL_DAY, TrimlightCoordinator, next_daily_day
 from .holiday_rules import HOLIDAY_OFFSET, HOLIDAYS, HolidayRule, holiday_name
 from .entity import TrimlightEntity
 from .sun import SUN_EVENTS, SUN_OFFSET, time_setting, window_times
@@ -77,11 +77,11 @@ class TrimlightScheduleCalendar(TrimlightEntity, CalendarEntity):
     @property
     def event(self) -> CalendarEvent | None:
         now = dt_util.now()
-        upcoming = (e for e in self._events(now - timedelta(days=1), now + _LOOKAHEAD) if e.end > now)
-        return min(upcoming, key=lambda e: e.start, default=None)
+        upcoming = (e for e in self._events(now - timedelta(days=1), now + _LOOKAHEAD) if e.end_datetime_local > now)
+        return min(upcoming, key=lambda e: e.start_datetime_local, default=None)
 
     async def async_get_events(self, hass: HomeAssistant, start_date: datetime, end_date: datetime) -> list[CalendarEvent]:
-        return sorted((e for e in self._events(start_date, end_date) if e.end > start_date and e.start < end_date), key=lambda e: e.start)
+        return sorted((e for e in self._events(start_date, end_date) if e.end_datetime_local > start_date and e.start_datetime_local < end_date), key=lambda e: e.start_datetime_local)
 
     async def async_set_schedule(
         self,
@@ -119,7 +119,10 @@ class TrimlightScheduleCalendar(TrimlightEntity, CalendarEntity):
         coordinator = self.coordinator
         events = []
 
-        def add(day: date, times: tuple[time, time], summary: str, description: str, uid: str) -> None:
+        def add(day: date, times: tuple[time, time], summary: str, description: str, uid: str, all_day: bool = False) -> None:
+            if all_day and times == ALL_DAY:
+                events.append(CalendarEvent(start=day, end=day + timedelta(days=1), summary=summary, description=description, uid=uid))
+                return
             on = datetime.combine(day, times[0], tz)
             off = datetime.combine(day, times[1], tz)
             if off <= on:
@@ -136,14 +139,14 @@ class TrimlightScheduleCalendar(TrimlightEntity, CalendarEntity):
                 except ServiceValidationError:
                     break
                 if covered:
-                    add(day, coordinator.calendar_window(schedule, day), summary, description, f"{schedule.id}-{day.isoformat()}")
+                    add(day, coordinator.calendar_window(schedule, day), summary, description, f"{schedule.id}-{day.isoformat()}", all_day=True)
         today = dt_util.now().date()
         for key, waiting in coordinator.holidays.waiting.items():
             summary = coordinator.saved_effect_name(waiting.effect_id) or f"Effect {waiting.effect_id}"
             description = f"Trimlight {holiday_name(waiting.rule.holiday)} schedule, held by Home Assistant until it can go back on the controller"
             for day in days:
                 if day >= today and coordinator.holiday_runs_on(key, waiting.rule, day) and (times := window_times(self.hass, waiting.on, waiting.off, day)):
-                    add(day, times, summary, description, f"{key}-{day.isoformat()}")
+                    add(day, times, summary, description, f"{key}-{day.isoformat()}", all_day=True)
         for index, daily in enumerate(data.daily):
             # A "today only" schedule's day is not reported back by the controller.
             if not daily.enabled or daily.repeat == Repeat.TODAY_ONLY:

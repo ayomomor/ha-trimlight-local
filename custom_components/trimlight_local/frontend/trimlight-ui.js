@@ -433,7 +433,7 @@ const PAGE_STYLE = `
   .sync::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; animation: sync 1s ease-in-out infinite alternate; }
   .sync[hidden] { display: none; }
   @keyframes sync { from { opacity: 0.25; } to { opacity: 1; } }
-  .legend button.waiting, .list button.waiting { border-style: dashed; }
+  .list button.waiting { border-style: dashed; }
   .card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; min-width: 0; box-shadow: var(--ha-card-box-shadow, none); }
   .card h2 { margin: 0 0 4px; font-size: 17px; font-weight: 500; }
   .sub { color: var(--muted); margin: 0 0 12px; font-size: 13px; }
@@ -525,7 +525,6 @@ const PAGE_STYLE = `
   .follow-status { margin: 0; font-weight: 500; }
 
   .sch-top { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
-  .year { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 18px; align-items: start; }
   .months { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 16px; }
   .mini h3 { margin: 0 0 6px; font-size: 13px; font-weight: 500; }
   .mini .g { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
@@ -533,11 +532,6 @@ const PAGE_STYLE = `
   .mini .g span.blank { background: none; cursor: default; }
   .mini .g span.on { color: #fff; text-shadow: 0 0 2px rgba(0, 0, 0, 0.7); }
   .mini .g span.today { outline: 2px solid var(--accent); outline-offset: 1px; }
-  .legend { display: grid; gap: 6px; }
-  .legend button { display: grid; grid-template-columns: 14px minmax(0, 1fr) auto; gap: 10px; align-items: center; text-align: left; border: 1px solid var(--line); background: var(--surface); padding: 8px 10px; border-radius: var(--radius-s); }
-  .legend i { width: 14px; height: 14px; border-radius: 4px; }
-  .legend small { display: block; color: var(--muted); }
-  .legend .t { font: 500 12px var(--mono); color: var(--muted); text-align: right; }
   .month { border: 1px solid var(--line); border-radius: var(--radius-s); overflow: hidden; background: var(--surface); }
   .month .dow, .month .week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
   .month .dow span { padding: 6px 8px; font-size: 11.5px; color: var(--muted); border-bottom: 1px solid var(--line); }
@@ -881,9 +875,9 @@ class TrimlightPanel extends HTMLElement {
       return { kind: "music", pill: "Following music", detail: `Following the music on ${speaker}. When it stops, the lights go back to what they showed.` };
     }
     if (c.by === "schedule") {
-      if (c.window) return { kind: "schedule", pill: "On schedule", detail: `On until ${clockTime(c.window.end)}, then ${this._thenText(c.window.end)}.` };
+      if (c.window) return { kind: "schedule", pill: "On schedule", detail: c.window.all_day ? "On all day." : `On until ${clockTime(c.window.end)}, then ${this._thenText(c.window.end)}.` };
       const next = (c.windows || []).find((w) => new Date(w.start).getTime() > Date.now());
-      if (next) return { kind: "schedule", pill: "On schedule", detail: `Next on ${dayWord(next.start)} at ${clockTime(next.start)}: ${next.effect || "a saved effect"}.` };
+      if (next) return { kind: "schedule", pill: "On schedule", detail: next.all_day ? `Next on ${dayWord(next.start)}, all day: ${next.effect || "a saved effect"}.` : `Next on ${dayWord(next.start)} at ${clockTime(next.start)}: ${next.effect || "a saved effect"}.` };
       const later = this._nextSchedule();
       return { kind: "schedule", pill: "On schedule", detail: later.startsWith("next: ") ? `Next on ${later.slice(6)}.` : `${later.charAt(0).toUpperCase()}${later.slice(1)}.` };
     }
@@ -1462,15 +1456,17 @@ class TrimlightPanel extends HTMLElement {
     const mode = this._modeState();
     const sorted = [...data.calendar].sort((a, b) => a.start[0] - b.start[0] || a.start[1] - b.start[1]);
     const range = (x) => (x.start[0] === x.end[0] && x.start[1] === x.end[1] ? shortDay(x.start) : `${shortDay(x.start)} – ${shortDay(x.end)}`);
-    const follows = (x) => (x.holiday ? ` · follows ${esc(this._holidayName(x.holiday.key))}${x.holiday.skips && x.holiday.skips.length ? `, skips ${x.holiday.skips.map((k) => k.year).join(", ")}` : ""}` : "");
-    const onText = (x) => (x.on_sun ? sunLabel(x.on_sun) : x.on);
+    const onText = (x) => (x.all_day ? "All day" : x.on_sun ? sunLabel(x.on_sun) : x.on);
+    const times = (x) => (x.all_day ? "All day" : `${onText(x)} – ${offText(x)}`);
+    const headline = (x) => (x.holiday ? esc(this._holidayName(x.holiday.key)) : range(x));
+    const underneath = (x) => (x.holiday ? `${range(x)}${x.holiday.skips && x.holiday.skips.length ? ` · skips ${x.holiday.skips.map((k) => k.year).join(", ")}` : ""}` : "");
     const offText = (x) => (x.off_sun ? sunLabel(x.off_sun) : x.off === "00:00" ? "Midnight" : `${x.off}${!x.on_sun && x.off <= x.on ? " next day" : ""}`);
     const sunWarning = data.sun && data.sun.location_ok === false
       ? `<div class="warn-box"><b>Check the home location.</b> Home Assistant's home location doesn't match its time zone, so sunset and sunrise times would come out wrong. Set it under Settings → System → Home information before using them.</div>` : "";
     const waiting = data.waiting || [];
     const stuck = [...data.calendar, ...waiting].filter((x) => x.holiday && x.holiday.problem)
       .map((x) => `<div class="warn-box"><b>${typeof x.id === "number" ? `Schedule ${x.id} didn't move.` : `The waiting ${esc(this._holidayName(x.holiday.key))} schedule is stuck.`}</b><span>${esc(x.holiday.problem)}</span><button class="btn tonal" type="button" data-act="edit" data-key="${x.id}">Open it</button></div>`).join("");
-    const waitingRow = (w) => `<button type="button" class="waiting" data-act="edit" data-key="${w.id}"><i style="background:${this._colourOf(w.effect)}"></i><span>${esc(w.effect || "Unknown effect")}<small>${esc(this._waitingText(w))}</small></span><span class="t">${icon("clock")}</span></button>`;
+    const waitingRow = (w) => `<button type="button" class="waiting" data-act="edit" data-key="${w.id}"><i style="background:${this._colourOf(w.effect)}"></i><span><b>${esc(this._holidayName(w.holiday.key))}</b><small class="note" style="display:block">${esc(this._waitingText(w))}</small></span><span class="mono">${esc(times(w))}</span><span>${esc(w.effect || "Unknown effect")}</span></button>`;
     const c = data.control || {};
     const paused = c.by === "schedule" ? "" : `<div class="warn-box">${icon("clock")}<span><b>Schedules are paused</b> while ${c.by === "app" ? "a change made in the Trimlight app" : "your change"} is showing. ${c.until ? `They take over again at ${clockTime(c.until)}.` : "It stays until you change it."}</span>
         <button class="btn tonal" type="button" data-act="resume">Back to schedule</button></div>`;
@@ -1491,8 +1487,7 @@ class TrimlightPanel extends HTMLElement {
           return `<span class="${x ? "on" : ""} ${isToday ? "today" : ""}" data-act="day" data-key="${mi + 1}-${k + 1}" ${x ? `style="background:${this._colourOf(x.effect)}" title="${esc(x.effect || "")}, ${esc(onText(x))}"` : 'title="Add a schedule"'}>${k + 1}</span>`;
         }));
         return `<div class="mini"><h3>${name}</h3><div class="g">${cells.join("")}</div></div>`;
-      }).join("")}</div>
-        <div class="legend">${sorted.length ? sorted.map((x) => `<button type="button" data-act="edit" data-key="${x.id}"><i style="background:${this._colourOf(x.effect)}"></i><span>${esc(x.effect || "Unknown effect")}<small>${range(x)}${follows(x)}</small></span><span class="t">${x.on_sun ? icon("sunset") : esc(x.on)}<br>${esc(x.off_sun ? "" : x.off)}</span></button>`).join("") : '<p class="note">No schedules yet. Click a day to add one.</p>'}${waiting.map(waitingRow).join("")}</div></div>`;
+      }).join("")}</div></div>`;
     } else if (s.view === "month") {
       const m = s.month;
       const first = new Date(m);
@@ -1509,7 +1504,7 @@ class TrimlightPanel extends HTMLElement {
           if (!x) { k++; continue; }
           let e = k;
           while (e + 1 < 7 && this._coversOn(x, days[e + 1])) e++;
-          bars.push(`<button type="button" data-act="edit" data-key="${x.id}" style="grid-column:${k + 1} / ${e + 2};background:${this._colourOf(x.effect)}" title="${esc(x.effect || "")}, ${esc(onText(x))} – ${esc(offText(x))}">${esc(onText(x))} ${esc(x.effect || "")}</button>`);
+          bars.push(`<button type="button" data-act="edit" data-key="${x.id}" style="grid-column:${k + 1} / ${e + 2};background:${this._colourOf(x.effect)}" title="${esc(x.effect || "")}, ${esc(times(x))}">${esc(onText(x))} ${esc(x.effect || "")}</button>`);
           k = e + 1;
         }
         data.daily.forEach((d, i) => {
@@ -1521,7 +1516,7 @@ class TrimlightPanel extends HTMLElement {
       }
       body = `<div class="month"><div class="dow">${["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => `<span>${d}</span>`).join("")}</div>${rows}</div>`;
     } else {
-      body = `<div class="list">${sorted.length ? sorted.map((x) => `<button type="button" data-act="edit" data-key="${x.id}"><i style="background:${this._colourOf(x.effect)}"></i><span><b>${range(x)}</b>${x.holiday ? `<small class="note" style="display:block">${follows(x).slice(3)}</small>` : ""}</span><span class="mono">${esc(onText(x))} – ${esc(offText(x))}</span><span>${esc(x.effect || "Unknown effect")}</span></button>`).join("") : '<p class="note">No schedules yet.</p>'}${waiting.map(waitingRow).join("")}</div>`;
+      body = `<div class="list">${sorted.length ? sorted.map((x) => `<button type="button" data-act="edit" data-key="${x.id}"><i style="background:${this._colourOf(x.effect)}"></i><span><b>${headline(x)}</b>${x.holiday ? `<small class="note" style="display:block">${underneath(x)}</small>` : ""}</span><span class="mono">${esc(times(x))}</span><span>${esc(x.effect || "Unknown effect")}</span></button>`).join("") : '<p class="note">No schedules yet.</p>'}${waiting.map(waitingRow).join("")}</div>`;
     }
     return `${head}${body}<p class="note" style="margin-top:14px">Each schedule repeats every year, one per date, or follows a holiday such as Easter or Thanksgiving and moves with it. Times can follow sunset or sunrise. Home Assistant keeps both up to date. Saving carries on in the background: ${SCHEDULE_PAUSE}.</p>`;
   }
@@ -1608,9 +1603,11 @@ class TrimlightPanel extends HTMLElement {
       ${dr.dateMode === "holiday" ? this._holidayFields() : this._haControls ? this._dateFields() : `<div class="dates"><label class="field"><span class="label">From</span><span class="row">${monthSel("start")}<input class="input mono" style="width:64px" type="number" min="1" max="31" value="${dr.start[1]}" data-in="drawer-day" data-key="start"></span></label>
         <label class="field"><span class="label">To</span><span class="row">${monthSel("end")}<input class="input mono" style="width:64px" type="number" min="1" max="31" value="${dr.end[1]}" data-in="drawer-day" data-key="end"></span></label></div>`}
       ${existing && existing.sun_stopped ? this._sunStopped(existing.sun_stopped) : ""}
-      ${this._timeSet("On", dr.on, "on")}${this._timeSet("Off", dr.off, "off")}
+      <div class="row"><span class="label">All day</span><span class="grow"></span><button class="switch" type="button" role="switch" data-act="all-day" aria-checked="${dr.allDay}" aria-label="All day"></button></div>
+      ${dr.allDay ? "" : `${this._timeSet("On", dr.on, "on")}${this._timeSet("Off", dr.off, "off")}
       ${this._sunNote(dr.on, dr.off)}
-      <p class="note">An off time earlier than the on time is on the next day, so 12:00 AM is midnight. Built-in effects can't be scheduled directly: save one on the Effects tab first.</p>
+      <p class="note">An off time earlier than the on time is on the next day, so 12:00 AM is midnight.</p>`}
+      <p class="note">Built-in effects can't be scheduled directly: save one on the Effects tab first.</p>
       ${existing && existing.holiday && existing.holiday.problem ? `<div class="warn-box"><b>${dr.waiting ? "It's stuck." : "It didn't move."}</b><span>${esc(existing.holiday.problem)}</span></div>` : ""}
       <div class="actions"><button class="btn primary" type="button" data-act="save-schedule" ${dr.dateMode === "holiday" && dr.from > dr.to ? "disabled" : ""}>${icon("save")}Save</button>${existing ? `<button class="btn ghost danger" type="button" data-act="delete-schedule">${icon("trash")}Delete</button>` : ""}</div>
     </aside>`;
@@ -1711,16 +1708,16 @@ class TrimlightPanel extends HTMLElement {
       const w = (data.waiting || []).find((x) => x.id === id);
       const h = w.holiday;
       this._s.drawer = { id: null, waiting: w.id, effect: w.effect || names[0], start: [12, 1], end: [12, 1], on: setting(w.on || "18:00", w.on_sun), off: setting(w.off || "23:00", w.off_sun),
-        dateMode: "holiday", holiday: h.key, from: h.start_offset, to: h.end_offset };
+        allDay: !!w.all_day, dateMode: "holiday", holiday: h.key, from: h.start_offset, to: h.end_offset };
     } else if (id !== null) {
       const x = data.calendar.find((c) => c.id === id);
       const h = x.holiday;
       this._s.drawer = { id: x.id, effect: x.effect || names[0], start: [...x.start], end: [...x.end], on: setting(x.on, x.on_sun), off: setting(x.off, x.off_sun),
-        dateMode: h ? "holiday" : "fixed", holiday: h ? h.key : this._nextHoliday(), from: h ? h.start_offset : 0, to: h ? h.end_offset : 0 };
+        allDay: !!x.all_day, dateMode: h ? "holiday" : "fixed", holiday: h ? h.key : this._nextHoliday(), from: h ? h.start_offset : 0, to: h ? h.end_offset : 0 };
     } else {
       const start = day || [12, 1];
       this._s.drawer = { id: null, effect: names[0], start: [...start], end: day ? [...start] : [12, 31], on: { mode: "sunset", offset: 0, clock: "17:00" }, off: { mode: "time", offset: 0, clock: "23:00" },
-        dateMode: "fixed", holiday: this._nextHoliday(), from: 0, to: 0 };
+        allDay: false, dateMode: "fixed", holiday: this._nextHoliday(), from: 0, to: 0 };
     }
   }
 
@@ -2057,6 +2054,7 @@ class TrimlightPanel extends HTMLElement {
         return;
       }
       case "daily-enabled": { const d = s.daily[Number(key)]; d.enabled = !d.enabled; d.dirty = true; break; }
+      case "all-day": s.drawer.allDay = !s.drawer.allDay; break;
       case "daily-repeat": { const d = s.daily[Number(key)]; d.repeat = target.dataset.mode; d.dirty = true; break; }
       case "daily-revert": s.daily[Number(key)] = this._dailyDraft(data.daily[Number(key)]); break;
       case "daily-save": this._saveDaily(Number(key)); return;
@@ -2266,7 +2264,7 @@ class TrimlightPanel extends HTMLElement {
   _saveSchedule() {
     const dr = this._s.drawer;
     const date = ([month, day]) => `2000-${pad(month)}-${pad(day)}`;
-    const time = (prefix, t) => (t.mode === "time" ? { [`${prefix}_time`]: t.clock } : { [`${prefix}_sun`]: t.mode, [`${prefix}_offset`]: t.offset });
+    const time = (prefix, t) => (dr.allDay ? { [`${prefix}_time`]: prefix === "on" ? "00:00" : "23:59" } : t.mode === "time" ? { [`${prefix}_time`]: t.clock } : { [`${prefix}_sun`]: t.mode, [`${prefix}_offset`]: t.offset });
     const dates = dr.dateMode === "holiday"
       ? { holiday: dr.holiday, holiday_start_offset: dr.from, holiday_end_offset: dr.to }
       : { start_date: date(dr.start), end_date: date(dr.end) };

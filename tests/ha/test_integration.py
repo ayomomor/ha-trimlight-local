@@ -521,7 +521,7 @@ async def test_page_data_and_file(hass: HomeAssistant, controller, hass_ws_clien
     result = (await ws.receive_json())["result"]
     assert result["entities"] == {"light": LIGHT, "mode": MODE, "calendar": CALENDAR}
     assert (result["switch_state"], result["combined_name"], result["repeats"]) == ("manual", "Combined effect", ["today_only", "every_day", "weekdays", "weekend"])
-    assert result["calendar"][5] == {"id": 6, "effect": "CHRISTMAS", "start": [12, 1], "end": [12, 27], "on": "16:22", "off": "07:06", "on_sun": None, "off_sun": None, "sun_stopped": None, "holiday": None}
+    assert result["calendar"][5] == {"id": 6, "effect": "CHRISTMAS", "start": [12, 1], "end": [12, 27], "on": "16:22", "off": "07:06", "on_sun": None, "off_sun": None, "sun_stopped": None, "all_day": False, "holiday": None}
     assert result["calendar"][3]["effect"] == "Combined effect"
     assert result["daily"][0] == {"enabled": False, "effect": "Simple", "repeat": "today_only", "on": "16:25", "off": "00:00", "on_sun": None, "off_sun": None, "sun_stopped": None}
     assert set(result["sun"]) == {"sunrise", "sunset", "location_ok"} and len(result["sun"]["sunset"]) == 5
@@ -664,6 +664,22 @@ async def test_schedule_follows_sunset(hass: HomeAssistant, controller, hass_ws_
     dismiss.assert_called_once()
 
     await call(hass, "delete_schedule", {"schedule_id": 9}, entity_id=CALENDAR)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
+async def test_an_all_day_schedule_is_an_all_day_event(hass: HomeAssistant, controller, hass_ws_client) -> None:
+    use_fixture(controller, "sync_reply.hex")
+    entry = await setup_entry(hass)
+    ws = await hass_ws_client(hass)
+    await ws.send_json({"id": 1, "type": f"{DOMAIN}/state", "entity_id": LIGHT})
+    calendar = {s["id"]: s for s in (await ws.receive_json())["result"]["calendar"]}
+    assert (calendar[2]["on"], calendar[2]["off"], calendar[2]["all_day"], calendar[6]["all_day"]) == ("00:00", "23:59", True, False)
+    response = await hass.services.async_call(
+        "calendar", "get_events", {ATTR_ENTITY_ID: CALENDAR, "start_date_time": "2027-07-03 00:00:00", "end_date_time": "2027-07-06 00:00:00"}, blocking=True, return_response=True
+    )
+    [event] = [e for e in response[CALENDAR]["events"] if e["summary"] == "INDEPENDENCE DAY"]
+    assert (event["start"], event["end"]) == ("2027-07-04", "2027-07-05")
     assert await hass.config_entries.async_unload(entry.entry_id)
     await hass.async_block_till_done()
 
