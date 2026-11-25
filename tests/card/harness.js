@@ -215,6 +215,28 @@ async function testPage() {
   check("patterns: nothing is picked when the page opens", $$('[data-act="open"]').map((b) => b.dataset.key).join() === "new,6,7,9" && !$('.rail [aria-current="true"]') && $(".editor h2").textContent === "Nothing picked yet",
     $(".editor h2") ? $(".editor h2").textContent : "");
   check("patterns: no play buttons, and no Try on the lights", !act("show-saved") && !act("play-draft") && !$('[data-in="try"]'));
+  const plain = STATE.current;
+  STATE.current = { ...plain, colors: [{ color: "#ff0000", dots: 5 }, { color: "#ff3300", dots: 5 }] };
+  Object.assign(STATE.control, { lit: true, window: { effect: "CHRISTMAS", effect_id: 9, end: inHours(2), all_day: false } });
+  page.hass = withLight("on", "unsaved-1");
+  await tick();
+  await tick();
+  check("patterns: while a schedule lights the roof, no unsaved pattern is listed", !act("open", "current") && $(".now b").textContent === "CHRISTMAS", $(".now b").textContent);
+  Object.assign(STATE.control, { by: "you", until: inHours(1), window: null });
+  page.hass = withLight("on", "unsaved-2");
+  await tick();
+  await tick();
+  check("patterns: when On shows a pattern that matches no saved one, it is listed as unsaved", !!act("open", "current"));
+  act("open", "current").click();
+  await tick();
+  Object.assign(STATE.control, { by: "schedule", until: null, lit: false });
+  page.hass = withLight("off", "unsaved-3");
+  await tick();
+  await tick();
+  check("patterns: with the lights off it is gone, and what was copied stays open as a new pattern", !act("open", "current") && $(".editor h2").textContent === "New pattern" && $$(".tile").length === 2, $(".editor h2").textContent);
+  STATE.current = plain;
+  act("open", "new").click();
+  await tick();
   const quiet = calls.length;
   act("open", 7).click();
   await tick();
@@ -261,6 +283,25 @@ async function testPage() {
   act("save-pattern").click();
   await tick();
   check("patterns: Save as new saves under the new name", last().service === "save_effect" && last().data.name === "Spooky" && last().data.colors[1] === "none", JSON.stringify(last()));
+  const centre = (el, dx = 0) => { const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2 + dx, y: r.top + r.height / 2 }; };
+  const drag = async (from, onto, dx = 0) => {
+    const a = centre(from);
+    const b = centre(onto, dx);
+    const at = (x, y) => ({ bubbles: true, composed: true, clientX: x, clientY: y, pointerType: "mouse", button: 0, pointerId: 1 });
+    from.dispatchEvent(new PointerEvent("pointerdown", at(a.x, a.y)));
+    window.dispatchEvent(new PointerEvent("pointermove", at(a.x + 12, a.y)));
+    window.dispatchEvent(new PointerEvent("pointermove", at(b.x, b.y)));
+    window.dispatchEvent(new PointerEvent("pointerup", at(b.x, b.y)));
+    await tick();
+  };
+  const titles = () => $$(".tile .sw").map((sw) => sw.title).join("|");
+  await drag($$(".tile .sw")[2], $$(".tile")[0], -$$(".tile")[0].getBoundingClientRect().width / 4);
+  check("patterns: dragging the third colour before the first moves it there", titles() === "#7800ff|#7700ff|No colour: these dots stay unlit" && $$(".tile")[0].classList.contains("sel") && !$(".drag-ghost"), titles());
+  await drag(act("pick", "#00ff00"), $$(".tile")[2]);
+  check("patterns: dragging a palette colour onto a colour changes it", titles() === "#7800ff|#7700ff|#00ff00" && $$(".tile")[2].classList.contains("sel"), titles());
+  act("select", 1).click();
+  await tick();
+  check("patterns: a click after dragging still works", $$(".tile")[1].classList.contains("sel"));
   const onAlready = calls.length;
   act("open", 6).click();
   await tick();
@@ -694,7 +735,7 @@ async function run() {
     const page = makePage();
     await tick();
     const key = hash.slice(5).replace("-narrow", "");
-    const view = { month: "schedules", list: "schedules", drawer: "schedules", allday: "schedules", holiday: "schedules", "settings-test": "settings" }[key] || key;
+    const view = { month: "schedules", list: "schedules", drawer: "schedules", allday: "schedules", holiday: "schedules", drag: "patterns", "settings-test": "settings" }[key] || key;
     inside(page).$(`[data-act="tab"][data-key="${view}"]`).click();
     await tick();
     if (key === "month" || key === "list") {
@@ -706,6 +747,17 @@ async function run() {
       await tick();
       inside(page).$('.list button[data-key="10"]').click();
       await tick();
+    }
+    if (key === "drag") {
+      inside(page).$$('[data-act="open"]').find((b) => b.textContent.includes("CANADA DAY")).click();
+      await tick();
+      const tiles = inside(page).$$(".colors .tile");
+      const from = tiles[0].querySelector(".sw").getBoundingClientRect();
+      const onto = tiles[tiles.length - 1].getBoundingClientRect();
+      const at = (x, y) => ({ bubbles: true, composed: true, clientX: x, clientY: y, pointerType: "mouse", button: 0, pointerId: 1 });
+      tiles[0].querySelector(".sw").dispatchEvent(new PointerEvent("pointerdown", at(from.left + 19, from.top + 19)));
+      window.dispatchEvent(new PointerEvent("pointermove", at(from.left + 40, from.top + 19)));
+      window.dispatchEvent(new PointerEvent("pointermove", at(onto.right - 20, onto.top + 30)));
     }
     if (key === "allday") {
       inside(page).$$(".mini")[6].querySelectorAll('.g span[data-act="day"]')[3].click();

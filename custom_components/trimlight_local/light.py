@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import string
 from typing import Any
 
@@ -332,6 +333,8 @@ class TrimlightLight(TrimlightEntity, LightEntity, RestoreEntity):
         if mode is not None and colors is not None:
             speed = coordinator.effect_settings.speed if speed is None else speed
             effect = LibraryEffect(0, name, CATEGORY_CUSTOM, PATTERN_MODES[mode], speed, self._brightness if brightness is None else brightness, _segments(colors, dots))
+        elif (window := coordinator.lit_by_schedule) is not None and (shown := coordinator.saved_effects().get(coordinator.saved_effect_name(window.effect_id))) is not None:
+            effect = dataclasses.replace(shown, id=0, name=name)
         else:
             current = coordinator.data.current_effect if coordinator.data is not None else None
             if current is None or current.category not in (CATEGORY_BUILTIN, CATEGORY_CUSTOM):
@@ -413,7 +416,9 @@ class TrimlightLight(TrimlightEntity, LightEntity, RestoreEntity):
     async def _show_at_new_brightness(self) -> None:
         coordinator = self.coordinator
         current = coordinator.data.current_effect if coordinator.data is not None else None
-        if (saved := coordinator.saved_effects().get(self._attr_effect)) is not None:
+        if (window := coordinator.lit_by_schedule) is not None and (saved := coordinator.saved_effects().get(coordinator.saved_effect_name(window.effect_id))) is not None:
+            await self._show_saved(saved, chosen=True)
+        elif (saved := coordinator.saved_effects().get(self._attr_effect)) is not None:
             await self._show_saved(saved, chosen=False)
         elif self._attr_effect in BUILTIN_EFFECTS:
             await coordinator.async_show_builtin(BUILTIN_EFFECTS.index(self._attr_effect), self._brightness)

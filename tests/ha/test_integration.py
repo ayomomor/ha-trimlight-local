@@ -1030,6 +1030,25 @@ async def test_light_is_on_only_while_lit(hass: HomeAssistant, controller) -> No
     await hass.async_block_till_done()
 
 
+async def test_during_a_schedule_the_schedules_pattern_is_what_is_shown(hass: HomeAssistant, controller) -> None:
+    use_fixture(controller, "sync_reply.hex")
+    controller.switch_state = 2
+    with patch(NOW, return_value=local(2026, 11, 25, 18, 0)):
+        entry = await setup_entry(hass)
+        coordinator = entry.runtime_data
+        simple = coordinator.saved_effects()["Simple"]
+        assert coordinator.data.current_effect.segments != simple.segments
+        await call(hass, "save_effect", {"name": "Simple copy"})
+        added = [data for sub, data in controller.passthrough if sub == Sub.ADD_LIBRARY_EFFECT][-1]
+        assert (added[26:30], simple.segments in added) == (bytes((simple.category, simple.mode, simple.speed, simple.brightness)), True)
+        await hass.services.async_call(LIGHT_DOMAIN, "turn_on", {ATTR_ENTITY_ID: LIGHT, ATTR_BRIGHTNESS: 100}, blocking=True)
+        await settle(hass)
+    sub, data = controller.passthrough[-1]
+    assert (sub, data) == (Sub.PREVIEW_CUSTOM, bytes((simple.mode, simple.speed, 100)) + simple.segments)
+    assert await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
+
+
 async def test_a_change_lasts_an_hour_then_the_schedules_take_over(hass: HomeAssistant, controller) -> None:
     use_fixture(controller, "sync_reply.hex")
     controller.switch_state = 2

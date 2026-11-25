@@ -257,7 +257,7 @@ The integration adds **Trimlight** to the sidebar, a local stand-in for the phon
   - Leaving the page while the lights are still On, after you switched them from On schedule, asks first: back to schedule, leave them On, or stay. Closing the tab gets the browser's own question, and the browser's back button a reminder afterwards with **Back to schedule**.
 - **Patterns**: create, edit and save patterns.
   - Saved patterns are listed down the side; nothing is picked when the page opens. Tapping one opens it. While the lights are On, it also shows on the roof straight away and your edits show live; while they are On schedule, it waits for **On**. A pattern on the roof that isn't saved is listed as "Unsaved pattern on the roof".
-  - Colours are tiles, with dot counts, a palette, any custom colour, and "no colour" for unlit dots.
+  - Colours are tiles, with dot counts, a palette, any custom colour, and "no colour" for unlit dots. Drag a tile to move it along the lights, or drag a palette colour onto a tile to change it; on a phone, drag by the colour circle.
   - Also here: speed, brightness, lightning or snow, Save or Save as new, Rename and Delete.
   - Lightning and snow belong to a saved effect, so they only show when the controller plays that effect from its memory. Tapping a saved pattern plays it that way, and so does turning one on while On. Live edits are sent as a preview, which shows without its lightning or snow.
 - **Effects**: all 180 built-in effects.

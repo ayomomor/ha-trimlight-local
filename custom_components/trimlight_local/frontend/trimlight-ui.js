@@ -490,6 +490,14 @@ const PAGE_STYLE = `
   .add-tile { width: 80px; border: 1px dashed var(--line); border-radius: var(--radius-s); background: none; color: var(--accent); display: grid; place-items: center; min-height: 82px; }
   .palette { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .palette .sw { width: 28px; height: 28px; border-radius: 50%; border: 1px solid rgba(127, 127, 127, 0.4); padding: 0; }
+  .colors .tile { cursor: grab; }
+  .colors .tile .sw, .palette .sw { touch-action: none; }
+  .colors .tile.dragging { opacity: 0.35; }
+  .colors .tile.drop-before::after, .colors .tile.drop-after::after { content: ""; position: absolute; top: -6px; bottom: -6px; width: 4px; border-radius: 2px; background: var(--accent); z-index: 60; }
+  .colors .tile.drop-before::after { left: -8px; }
+  .colors .tile.drop-after::after { right: -8px; }
+  .colors .tile.drop-on { outline: 2px dashed var(--accent); outline-offset: 2px; }
+  .drag-ghost { position: fixed; z-index: 50; margin: 0; pointer-events: none; opacity: 0.9; cursor: grabbing; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25); }
   .palette input[type="color"] { width: 30px; height: 26px; border: 0; padding: 0; background: none; }
 
   .fx-top { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
@@ -707,6 +715,9 @@ class TrimlightPanel extends HTMLElement {
     this._tourEl = root.querySelector(".tour-host");
     this._controllersEl = root.querySelector(".controllers");
     root.addEventListener("click", (ev) => this._onClick(ev));
+    root.addEventListener("pointerdown", (ev) => this._dragStart(ev));
+    this._onDragMove = (ev) => this._dragMove(ev);
+    this._onDragEnd = (ev) => this._dragEnd(ev);
     root.addEventListener("keydown", (ev) => {
       if (ev.key !== "Escape") return;
       if (this._tourStep != null) this._endTour();
@@ -776,7 +787,7 @@ class TrimlightPanel extends HTMLElement {
     this._ledTimer();
     // A reload after every light update must not rebuild the page under someone typing or dragging a slider.
     const active = this.shadowRoot.activeElement;
-    if (!first && active && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName)) this._pending = true;
+    if (!first && (this._drag || (active && /^(INPUT|SELECT|TEXTAREA)$/.test(active.tagName)))) this._pending = true;
     else this.render();
   }
 
@@ -1064,6 +1075,7 @@ class TrimlightPanel extends HTMLElement {
         <p><b>On</b>: the lights show the pattern or effect you select, for the time you set. The time left is shown at the top of the page. When it ends, the lights return to the schedule. Select <b>On schedule</b> to return earlier.</p>
         <h3>Patterns and effects</h3>
         <p>When the lights are On, selecting a pattern or effect shows it immediately, and changes are shown as you make them. When the lights are On schedule, select On first. On starts with the pattern or effect you selected.</p>
+        <p>In a pattern, drag a colour to move it along the lights, or drag a colour from the palette onto one to change it.</p>
         <h3>Turning the lights off</h3>
         <p>To keep the lights off, go to <b>Settings</b> and select <b>Disable the lights</b>. Schedules are paused until you select <b>Enable</b>.</p>
         <h3>Sunset and sunrise</h3>
@@ -1242,6 +1254,8 @@ class TrimlightPanel extends HTMLElement {
   _patterns() {
     const s = this._s;
     const data = this._data;
+    const unsaved = this._unsavedOnRoof();
+    if (s.source === "current" && !unsaved) s.source = "new";
     const d = s.draft;
     const editing = typeof s.source === "number" ? this._effect(s.source) : null;
     const saved = data.effects.filter((e) => e.kind === "pattern");
@@ -1252,7 +1266,7 @@ class TrimlightPanel extends HTMLElement {
     const hint = `<p class="hint">${on ? "Tap a pattern to show it on your roof." : "Pick a pattern, then tap On at the top to show it on your roof."}</p>`;
     const rail = `<div class="rail" aria-label="Saved patterns">
         <button type="button" data-act="open" data-key="new" aria-current="${showing("new")}"><span class="new">${icon("plus")} New pattern</span></button>
-        ${data.current && data.current.kind === "pattern" && !this._savedMatch(data.current) ? `<button type="button" data-act="open" data-key="current" aria-current="${s.source === "current"}"><span>Unsaved pattern on the roof</span>${bar(data.current.colors)}<span class="meta">Save it to keep it</span></button>` : ""}
+        ${unsaved ? `<button type="button" data-act="open" data-key="current" aria-current="${s.source === "current"}"><span>Unsaved pattern on the roof</span>${bar(unsaved.colors)}<span class="meta">Save it to keep it</span></button>` : ""}
         ${saved.map((e) => `<div class="item"><button type="button" data-act="open" data-key="${e.id}" aria-current="${showing(e.id)}"><span>${esc(e.name)}</span>${bar(e.colors)}<span class="meta">${esc(modeLabel(e.mode))}${e.overlay ? ` · ${e.overlay === "snow" ? "Snow" : "Lightning"}` : ""}</span></button></div>`).join("")}
       </div>`;
     if (!d) {
@@ -1274,7 +1288,7 @@ class TrimlightPanel extends HTMLElement {
           <label class="field"><span class="label">Mode</span><select class="select" data-in="mode">${data.modes.map((m) => `<option value="${m.key}" ${m.key === d.mode ? "selected" : ""}>${esc(m.name)}</option>`).join("")}</select></label>
         </div>
         <div class="card">
-          <div class="row"><h2>Colours</h2><span class="grow"></span><span class="note">In order along the lights · ${d.colors.length} of ${data.limits.colors}</span></div>
+          <div class="row"><h2>Colours</h2><span class="grow"></span><span class="note">In order along the lights · drag to reorder · ${d.colors.length} of ${data.limits.colors}</span></div>
           <div class="colors" style="margin-top:12px">${d.colors.map((c, i) => `<div class="tile ${i === s.selected ? "sel" : ""}" data-act="select" data-key="${i}">
               <span class="num">${i + 1}</span>
               <span class="sw ${c.color ? "" : "unlit"}" style="${c.color ? `background:${c.color}` : ""}" title="${c.color ? c.color : "No colour: these dots stay unlit"}"></span>
@@ -1306,6 +1320,13 @@ class TrimlightPanel extends HTMLElement {
         </div>
       </div>
     </div>`;
+  }
+
+  _unsavedOnRoof() {
+    const data = this._data;
+    const current = data.current;
+    if (!current || current.kind !== "pattern" || this._savedMatch(current)) return null;
+    return this._litState() && !data.control.window && !this._showingName ? current : null;
   }
 
   _savedMatch(look) {
@@ -1875,7 +1896,95 @@ class TrimlightPanel extends HTMLElement {
 
   /* ---------- Events ---------- */
 
+  _dragStart(ev) {
+    const s = this._s;
+    if (this._drag || s.tab !== "patterns" || !s.draft || (ev.pointerType === "mouse" && ev.button !== 0)) return;
+    const tile = ev.target.closest(".colors .tile");
+    const swatch = ev.target.closest(".palette .sw");
+    if ((!tile && !swatch) || (tile && ev.target.closest("button, input"))) return;
+    this._drag = { from: tile ? Number(tile.dataset.key) : null, colour: swatch ? swatch.dataset.key || null : null, source: tile || swatch, x: ev.clientX, y: ev.clientY, started: false, to: null };
+    window.addEventListener("pointermove", this._onDragMove);
+    window.addEventListener("pointerup", this._onDragEnd);
+    window.addEventListener("pointercancel", this._onDragEnd);
+  }
+
+  _dragMove(ev) {
+    const d = this._drag;
+    if (!d) return;
+    if (!d.started) {
+      if (Math.hypot(ev.clientX - d.x, ev.clientY - d.y) < 6) return;
+      d.started = true;
+      const rect = d.source.getBoundingClientRect();
+      d.dx = d.x - rect.left;
+      d.dy = d.y - rect.top;
+      d.ghost = d.source.cloneNode(true);
+      d.ghost.className = `${d.source.className} drag-ghost`;
+      d.ghost.style.width = `${rect.width}px`;
+      d.ghost.style.height = `${rect.height}px`;
+      this._pageEl.append(d.ghost);
+      d.source.classList.add("dragging");
+    }
+    ev.preventDefault();
+    d.ghost.style.left = `${ev.clientX - d.dx}px`;
+    d.ghost.style.top = `${ev.clientY - d.dy}px`;
+    this.shadowRoot.querySelectorAll(".colors .tile.drop-before, .colors .tile.drop-after, .colors .tile.drop-on").forEach((t) => t.classList.remove("drop-before", "drop-after", "drop-on"));
+    const over = this.shadowRoot.elementFromPoint(ev.clientX, ev.clientY);
+    const tile = over && over.closest(".colors .tile");
+    if (!tile) {
+      d.to = null;
+      return;
+    }
+    const index = Number(tile.dataset.key);
+    if (d.from === null) {
+      tile.classList.add("drop-on");
+      d.to = { index };
+    } else {
+      const rect = tile.getBoundingClientRect();
+      const after = ev.clientX > rect.left + rect.width / 2;
+      tile.classList.add(after ? "drop-after" : "drop-before");
+      d.to = { index, after };
+    }
+  }
+
+  _dragEnd(ev) {
+    const d = this._drag;
+    this._drag = null;
+    window.removeEventListener("pointermove", this._onDragMove);
+    window.removeEventListener("pointerup", this._onDragEnd);
+    window.removeEventListener("pointercancel", this._onDragEnd);
+    if (!d || !d.started) {
+      this._flushPending();
+      return;
+    }
+    d.ghost.remove();
+    this._pending = false;
+    this._dragged = true;
+    setTimeout(() => { this._dragged = false; }, 0);
+    if (ev.type === "pointercancel" || !d.to) {
+      this.render();
+      return;
+    }
+    const s = this._s;
+    const colors = s.draft.colors;
+    if (d.from === null) {
+      colors[d.to.index].color = d.colour;
+      s.selected = d.to.index;
+    } else {
+      let to = d.to.index + (d.to.after ? 1 : 0);
+      if (to > d.from) to -= 1;
+      const [moved] = colors.splice(d.from, 1);
+      colors.splice(to, 0, moved);
+      s.selected = to;
+    }
+    this._livePreview();
+    this.render();
+  }
+
   _onClick(ev) {
+    if (this._dragged) {
+      this._dragged = false;
+      return;
+    }
     const target = ev.target.closest("[data-act]");
     if (!target || target.disabled) return;
     const act = target.dataset.act;
